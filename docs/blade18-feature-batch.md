@@ -114,10 +114,15 @@ included in public source or release artifacts.
 - Hidden on battery with event-driven lighting policies enabled, the release used
   0.015625 CPU seconds over 30.03 seconds (about 0.052% of one core), with a
   125 MB working set. This measures app CPU use, not whole-system battery drain.
+- Physical sleep/resume produced a successful blue-preset recovery journal, and
+  the owner saw blue return before the keyboard later appeared red. Subsequent
+  firmware readback still reported blue, while underside enable had changed.
+  The source of the later visible change is unresolved; this does not establish
+  stable lighting ownership when vendor software/firmware also controls lighting.
 
 Display-off and resume event injection verifies policy routing and real hardware
-writes, not a physical suspend/resume cycle. Physical battery transitions, per-key
-appearance and a full charging cycle must be reported separately from those tests.
+writes. Physical observations are recorded separately above. A full charging cycle
+has not been validated.
 
 Developer commands (use a new output file/directory each time):
 
