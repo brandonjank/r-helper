@@ -1,0 +1,245 @@
+use super::*;
+static LAST: std::sync::Mutex<Option<Preset>> = std::sync::Mutex::new(None);
+fn cache_path() -> Option<std::path::PathBuf> {
+    std::env::var_os("LOCALAPPDATA")
+        .map(|p| std::path::PathBuf::from(p).join("RHelper").join("last-lighting.json"))
+}
+fn cached() -> Option<Preset> {
+    let path = cache_path()?;
+    if std::fs::metadata(&path).ok()?.len() > 65536 {
+        return None;
+    }
+    let p: Preset = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    p.validate().ok()?;
+    Some(p)
+}
+fn persist(preset: &Preset) -> Result<()> {
+    let Some(path) = cache_path() else {
+        return Ok(());
+    };
+    std::fs::create_dir_all(path.parent().unwrap())?;
+    let temporary = path.with_extension(format!(
+        "{}-{}.tmp",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos()
+    ));
+    let mut file = File::options().write(true).create_new(true).open(&temporary)?;
+    serde_json::to_writer_pretty(&mut file, preset)?;
+    file.sync_all()?;
+    drop(file);
+    std::fs::rename(temporary, path)?;
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Style {
+    Static,
+    Breathing,
+    DualBreathing,
+    WaveLeft,
+    WaveRight,
+    Reactive,
+    PerKey,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Preset {
+    pub style: Style,
+    pub color: [u8; 3],
+    pub second: [u8; 3],
+    pub keys: Vec<[u8; 3]>,
+    pub brightness: u8,
+    pub underside: bool,
+    pub underside_brightness: u8,
+    pub logo: crate::types::LogoMode,
+}
+impl Preset {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(self.keys.len() == 114, "Keyboard map must contain 6 × 19 colors");
+        Ok(())
+    }
+    fn packet(&self) -> Vec<u8> {
+        let (id, flags, rate, colors) = match self.style {
+            Style::Static => (1, 0, 1, vec![self.color]),
+            Style::Breathing => (2, 0, 1, vec![self.color]),
+            Style::DualBreathing => (2, 0, 1, vec![self.color, self.second]),
+            // Directions verified visually on the Blade 18 from the typing position.
+            Style::WaveLeft => (4, 2, 40, vec![]),
+            Style::WaveRight => (4, 1, 40, vec![]),
+            Style::Reactive => (5, 0, 2, vec![self.color]),
+            Style::PerKey => (8, 0, 0, vec![]),
+        };
+        let mut p = vec![1, 5, id, flags, rate, colors.len() as u8];
+        for color in colors {
+            p.extend_from_slice(&color);
+        }
+        p
+    }
+    pub fn capture(s: &Lighting, logo: crate::types::LogoMode) -> Result<Self> {
+        let d = &s.keyboard_effect;
+        if d.get(2) == Some(&8) {
+            let mut p=LAST.lock().map_err(|_|anyhow::anyhow!("Lighting cache unavailable"))?.clone().or_else(cached).filter(|p|p.style==Style::PerKey).context("External Chroma pixels cannot be captured; apply an R-Helper firmware effect first")?;
+            p.brightness = s.keyboard_brightness;
+            p.underside = s.underside;
+            p.underside_brightness = s.underside_brightness;
+            p.logo = logo;
+            ensure!(p.matches(s), "Current per-key mode differs from the last R-Helper map");
+            return Ok(p);
+        }
+        let style = match (d.get(2), d.get(5)) {
+            (Some(1), Some(1)) => Style::Static,
+            (Some(2), Some(1)) => Style::Breathing,
+            (Some(2), Some(2)) => Style::DualBreathing,
+            (Some(4), Some(0)) => {
+                if d[3] == 1 {
+                    Style::WaveRight
+                } else {
+                    Style::WaveLeft
+                }
+            }
+            (Some(5), Some(1)) => Style::Reactive,
+            _ => anyhow::bail!(
+                "Current Chroma pixels cannot be captured; apply an R-Helper effect first"
+            ),
+        };
+        let color = if d.len() >= 9 { [d[6], d[7], d[8]] } else { [32, 64, 255] };
+        let preset = Self {
+            style,
+            color,
+            second: if d.len() >= 12 { [d[9], d[10], d[11]] } else { [255, 64, 32] },
+            keys: vec![color; 114],
+            brightness: s.keyboard_brightness,
+            underside: s.underside,
+            underside_brightness: s.underside_brightness,
+            logo,
+        };
+        ensure!(
+            preset.matches(s),
+            "Current effect parameters cannot be captured exactly; apply an R-Helper effect first"
+        );
+        Ok(preset)
+    }
+    fn matches(&self, s: &Lighting) -> bool {
+        let expected = self.packet();
+        let mut actual = s.keyboard_effect.clone();
+        if matches!(self.style, Style::Static | Style::Breathing | Style::DualBreathing)
+            && actual.get(4).is_some_and(|v| *v <= 1)
+        {
+            actual[4] = 1;
+        }
+        actual == expected
+            && s.keyboard_brightness == self.brightness
+            && s.underside == self.underside
+            && s.underside_brightness == self.underside_brightness
+    }
+    fn write(&self, device: &Device) -> Result<()> {
+        c::send_command(device, 0x0f02, &self.packet())?;
+        if self.style == Style::PerKey {
+            for row in 0..6 {
+                let mut p = vec![0, 5, row as u8, 0, 18];
+                for color in &self.keys[row * 19..(row + 1) * 19] {
+                    p.extend_from_slice(color);
+                }
+                c::send_command(device, 0x0f03, &p)?;
+            }
+        }
+        c::set_keyboard_brightness(device, self.brightness)?;
+        c::set_logo_mode(device, self.logo)?;
+        write(device, Change::Underside(self.underside))?;
+        write(device, Change::UndersideBrightness(self.underside_brightness))?;
+        Ok(())
+    }
+    pub fn apply(&self, path: &Path) -> Result<Lighting> {
+        self.validate()?;
+        let mut file = File::options().create_new(true).write(true).open(path)?;
+        let device = open()?;
+        let before = read(&device)?;
+        let logo = c::get_logo_mode(&device)?;
+        // For CustomFrame, the caller must retain the last applied R-Helper map
+        // for recovery; never pretend effect metadata backs up the pixels.
+        let recovery = Self::capture(&before, logo).ok();
+        super::super::journal(
+            &mut file,
+            &serde_json::json!({"model":"RZ09-0529","operation":"lighting_preset","original":before,"recovery":recovery,"requested":self}),
+        )?;
+        let result = self.write(&device).and_then(|_| {
+            let after = read(&device)?;
+            ensure!(
+                self.matches(&after)
+                    && c::get_logo_mode(&device)? == self.logo
+                    && before.startup_animation == after.startup_animation,
+                "Lighting preset readback mismatch: {:?}",
+                after.keyboard_effect
+            );
+            Ok(after)
+        });
+        let rollback = if result.is_err() {
+            recovery.as_ref().map(|p| {
+                p.write(&device).and_then(|_| {
+                    ensure!(p.matches(&read(&device)?), "Lighting rollback mismatch");
+                    Ok(())
+                })
+            })
+        } else {
+            None
+        };
+        super::super::journal(
+            &mut file,
+            &serde_json::json!({"model":"RZ09-0529","operation":"lighting_preset","original":before,"recovery":recovery,"requested":self,"result":result.as_ref().ok(),"error":result.as_ref().err().map(|e|format!("{e:#}")),"rollback":rollback.as_ref().map(|r|r.as_ref().map(|_|true).map_err(|e|format!("{e:#}")))}),
+        )?;
+        if let Some(Err(error)) = rollback {
+            return Err(error.context("Lighting recovery failed"));
+        }
+        if result.is_ok() {
+            *LAST.lock().map_err(|_| anyhow::anyhow!("Lighting cache unavailable"))? =
+                Some(self.clone());
+            persist(self)
+                .context("Lighting applied, but its local preset cache could not be saved")?;
+        }
+        result
+    }
+}
+impl Style {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Static => "Static",
+            Self::Breathing => "Breathing",
+            Self::DualBreathing => "Two-color breathing",
+            Self::WaveLeft => "Wave left",
+            Self::WaveRight => "Wave right",
+            Self::Reactive => "Reactive",
+            Self::PerKey => "Per-key colors",
+        }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn captures_only_exact_recoverable_firmware_parameters() {
+        let mut s = Lighting {
+            startup_animation: true,
+            underside: false,
+            underside_brightness: 64,
+            keyboard_effect: vec![1, 5, 2, 0, 0, 2, 32, 64, 255, 255, 64, 32],
+            logo_effect: vec![1, 4, 1, 0, 0, 0],
+            keyboard_brightness: 176,
+            logo_brightness: 255,
+        };
+        let p = Preset::capture(&s, crate::types::LogoMode::Static).unwrap();
+        assert_eq!(p.style, Style::DualBreathing);
+        assert_eq!(p.second, [255, 64, 32]);
+        s.keyboard_effect = vec![1, 5, 4, 1, 40, 0];
+        let right = Preset::capture(&s, crate::types::LogoMode::Static).unwrap();
+        assert_eq!(right.style, Style::WaveRight);
+        assert_eq!(right.packet(), s.keyboard_effect);
+        s.keyboard_effect[3] = 2;
+        let left = Preset::capture(&s, crate::types::LogoMode::Static).unwrap();
+        assert_eq!(left.style, Style::WaveLeft);
+        assert_eq!(left.packet(), s.keyboard_effect);
+        s.keyboard_effect[4] = 99;
+        assert!(Preset::capture(&s, crate::types::LogoMode::Static).is_err());
+        s.keyboard_effect = vec![1, 5, 3, 0, 0, 0];
+        assert!(Preset::capture(&s, crate::types::LogoMode::Static).is_err());
+    }
+}

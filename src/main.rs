@@ -1,8 +1,11 @@
 #![windows_subsystem = "windows"]
 
 mod blade_app;
+mod blade_batch_test;
 mod blade_curves;
 mod blade_desktop;
+mod blade_display;
+mod blade_policy;
 mod blade_power;
 mod blade_profiles;
 mod device;
@@ -1309,7 +1312,23 @@ fn set_windows_app_id() {
 fn set_windows_app_id() {}
 
 fn main() -> Result<(), eframe::Error> {
-    if blade_curves::dispatch_cli() {return Ok(());}
+    if let Some(result) = blade_batch_test::dispatch() {
+        if let Err(error) = result {
+            eprintln!("Batch test: {error:#}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+    if let Some(result) = blade_display::dispatch() {
+        if let Err(error) = result {
+            eprintln!("Display recovery: {error:#}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+    if blade_curves::dispatch_cli() {
+        return Ok(());
+    }
     set_windows_app_id();
     if std::env::args().any(|arg| arg == "--preview-blade18") {
         return blade_app::run_preview();

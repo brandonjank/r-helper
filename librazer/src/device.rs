@@ -97,6 +97,13 @@ impl Device {
 
             let response_size = self.device.get_feature_report(&mut response_buf)?;
             if response_buf.len() != response_size {
+                // Audited Blade diagnostics/controls are getters or idempotent
+                // setters. A short HID reply must not bypass their bounded
+                // retry path (observed during resume/policy testing).
+                if self.read_only && attempt + 1 < MAX_RETRIES {
+                    thread::sleep(time::Duration::from_millis(100));
+                    continue;
+                }
                 return Err(anyhow!("Response size != {}", response_buf.len()));
             }
 

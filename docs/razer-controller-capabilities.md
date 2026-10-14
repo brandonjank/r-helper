@@ -65,6 +65,11 @@ hidden-app AC/battery switching passed. This is separate from HID panel-mode or
 dual-resolution switching; see [display validation](blade18-display.md).
 Firmware keyboard Breathing passed readback/restoration and owner visual
 confirmation. Advertised Spectrum did not apply in the tested forms and is blocked.
+The 0.5.0 batch additionally passed command/metadata checks for dual Breathing,
+Wave left/right, Reactive and bounded per-key rows. Pixels cannot be read back;
+the per-key editor remains experimental. Shared flag `04` provides charge-once
+request/cancel while preserving the observed other flags. See the
+[feature batch](blade18-feature-batch.md) for automation and validation distinctions.
 
 ## Sources
 
