@@ -1,6 +1,3 @@
-> [!WARNING]  
-> Note from Fatalution: I returned my Blade 16.    
-
 # R-Helper
 
 This fork is maintained at [brandonjank/r-helper](https://github.com/brandonjank/r-helper),
@@ -60,6 +57,20 @@ An individual failed getter is reported in JSON and does not imply a zero/defaul
 Successful getter responses establish read support only, not safe setting ranges for other controls.
 
 See [Blade 18 validation](docs/blade18-validation.md) for observed results and next steps.
+See the [Blade 18 research and milestones](docs/blade18-roadmap.md) for independent
+RGB, refresh-rate profiles, three-fan curves, tuning and BIOS/driver plans.
+
+Additional explicit diagnostics (new output files required):
+
+```powershell
+cargo run -p librazer --bin rhelper-diagnostics -- --probe-lighting --output lighting.json
+cargo run -p librazer --bin rhelper-diagnostics -- --probe-sensors --output sensors.json
+cargo run -p librazer --bin rhelper-diagnostics -- --validate-fan-zones --output fan-zones.json
+```
+
+The sensor view queries on demand, includes the third fan's candidate readings and
+controller firmware, and preserves unsupported temperature queries as errors. The
+normal idle power watcher uses Windows notifications; it does not poll the controller.
 
 A Windows application to control Razer Blade settings w/o Synapse.
 

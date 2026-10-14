@@ -104,6 +104,7 @@ pub enum Change {
     Performance(PerfMode),
     Boosts(CpuBoost, GpuBoost),
     ManualFans(u16),
+    ManualFanZones([u16; 2]),
     AutoFans,
 }
 
@@ -115,6 +116,14 @@ fn validate_change(change: &Change) -> Result<()> {
         }
         Change::ManualFans(rpm) => {
             ensure!((FAN_MIN..=FAN_MAX).contains(rpm) && rpm % 100 == 0, "RPM outside tested range")
+        }
+        Change::ManualFanZones(targets) => {
+            for rpm in targets {
+                ensure!(
+                    (FAN_MIN..=FAN_MAX).contains(rpm) && rpm % 100 == 0,
+                    "RPM outside tested range"
+                );
+            }
         }
         _ => {}
     }
@@ -139,18 +148,23 @@ fn apply(device: &Device, change: &Change) -> Result<()> {
             c::set_cpu_boost(device, cpu)?;
             c::set_gpu_boost(device, gpu)?;
         }
-        Change::ManualFans(rpm) => {
-            ensure!(
-                (FAN_MIN..=FAN_MAX).contains(&rpm) && rpm % 100 == 0,
-                "RPM outside tested range"
-            );
+        Change::ManualFans(_) | Change::ManualFanZones(_) => {
+            let targets = match *change {
+                Change::ManualFans(rpm) => [rpm; 2],
+                Change::ManualFanZones(targets) => targets,
+                _ => unreachable!(),
+            };
             ensure!(
                 c::get_perf_mode(device)?.0 == PerfMode::Balanced,
                 "Manual fans require Balanced mode"
             );
-            c::set_fan_rpm(device, rpm, false)?;
+            for (zone, rpm) in [FanZone::Zone1, FanZone::Zone2].into_iter().zip(targets) {
+                c::set_fan_zone_rpm(device, zone, rpm, false)?;
+            }
             c::set_fan_mode(device, FanMode::Manual)?;
-            c::set_fan_rpm(device, rpm, true)?;
+            for (zone, rpm) in [FanZone::Zone1, FanZone::Zone2].into_iter().zip(targets) {
+                c::set_fan_zone_rpm(device, zone, rpm, true)?;
+            }
         }
         Change::AutoFans => c::set_fan_mode(device, FanMode::Auto)?,
     }
@@ -163,6 +177,7 @@ fn apply(device: &Device, change: &Change) -> Result<()> {
         Change::Performance(v) => state.performance == v && state.fan_mode == FanMode::Auto,
         Change::Boosts(cpu, gpu) => state.cpu == Some(cpu) && state.gpu == Some(gpu),
         Change::ManualFans(v) => state.fan_mode == FanMode::Manual && state.fan_setpoints == [v, v],
+        Change::ManualFanZones(v) => state.fan_mode == FanMode::Manual && state.fan_setpoints == v,
         Change::AutoFans => state.fan_mode == FanMode::Auto,
     };
     ensure!(matches, "Readback mismatch after {change:?}: {state:?}");
@@ -245,7 +260,8 @@ pub fn restore_record(path: &Path) -> Result<State> {
 pub fn change(change: Change) -> Result<State> {
     validate_change(&change)?;
     ensure!(
-        !matches!(change, Change::ManualFans(_)) || MANUAL_FANS_VERIFIED,
+        !matches!(change, Change::ManualFans(_) | Change::ManualFanZones(_))
+            || MANUAL_FANS_VERIFIED,
         "Manual fan control is pending actual RPM validation; use firmware automatic cooling"
     );
     let device = open()?;
@@ -321,6 +337,15 @@ pub fn apply_profile(profile: &Profile) -> Result<State> {
 }
 
 pub fn validate_fans(path: &Path) -> Result<Value> {
+    validate_fan_targets(path, &[([4000, 4000], 12), ([4500, 4500], 6)])
+}
+
+/// Test unequal zone targets in both directions, without assuming CPU/GPU mapping.
+pub fn validate_fan_zones(path: &Path) -> Result<Value> {
+    validate_fan_targets(path, &[([4000, 4500], 6), ([4500, 4000], 6)])
+}
+
+fn validate_fan_targets(path: &Path, cases: &[([u16; 2], usize)]) -> Result<Value> {
     let mut file = File::options().write(true).create_new(true).open(path)?;
     let device = open()?;
     let original = read(&device)?;
@@ -329,12 +354,15 @@ pub fn validate_fans(path: &Path) -> Result<Value> {
     journal(&mut file, &report)?;
     let result = (|| -> Result<()> {
         apply(&device, &Change::Performance(PerfMode::Balanced))?;
-        for (rpm, count) in [(4000, 12), (4500, 6)] {
-            apply(&device, &Change::ManualFans(rpm))?;
+        for &(targets, count) in cases {
+            apply(&device, &Change::ManualFanZones(targets))?;
             for _ in 0..count {
                 thread::sleep(Duration::from_secs(5));
                 let observed = read(&device)?;
-                eprintln!("Fan request {rpm}, actual {:?}", observed.fan_actual);
+                eprintln!(
+                    "Fan request {targets:?}, setpoints {:?}, actual {:?}",
+                    observed.fan_setpoints, observed.fan_actual
+                );
                 report["samples"].as_array_mut().unwrap().push(serde_json::to_value(observed)?);
                 journal(&mut file, &report)?;
             }
@@ -342,12 +370,14 @@ pub fn validate_fans(path: &Path) -> Result<Value> {
         Ok(())
     })();
     let restored = restore(&device, &original);
+    let passed = result.is_ok();
     report["error"] = json!(result.err().map(|e| format!("{e:#}")));
     report["restore_error"] = json!(restored.as_ref().err().map(|e| format!("{e:#}")));
     report["restored"] = serde_json::to_value(restored.as_ref().ok())?;
     report["complete"] = json!(true);
     journal(&mut file, &report)?;
     restored?;
+    ensure!(passed, "Fan validation failed; settings restored; inspect saved report");
     Ok(report)
 }
 
@@ -496,5 +526,9 @@ mod tests {
         for rpm in [4000, 4200, 4500] {
             assert!(validate_change(&Change::ManualFans(rpm)).is_ok());
         }
+        assert!(validate_change(&Change::ManualFanZones([4000, 4500])).is_ok());
+        assert!(validate_change(&Change::ManualFanZones([4500, 4000])).is_ok());
+        assert!(validate_change(&Change::ManualFanZones([4000, 3999])).is_err());
+        assert!(validate_change(&Change::ManualFanZones([4501, 4000])).is_err());
     }
 }

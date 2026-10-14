@@ -97,10 +97,14 @@ impl Device {
             let response = <&[u8] as TryInto<Packet>>::try_into(&response_buf[1..])?;
             //println!("Response {:?}", response);
 
-            if response.ensure_matches_report(&report).is_ok() {
-                return Ok(response);
-            } else if attempt == MAX_RETRIES - 1 {
-                return Err(anyhow!("Failed to match report after {} attempts", MAX_RETRIES));
+            match response.ensure_matches_report(&report) {
+                Ok(()) => return Ok(response),
+                Err(error) if attempt == MAX_RETRIES - 1 => {
+                    return Err(
+                        error.context(format!("Invalid response after {MAX_RETRIES} attempts"))
+                    );
+                }
+                Err(_) => {}
             }
 
             // Add a small delay before retrying

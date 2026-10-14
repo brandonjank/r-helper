@@ -7,7 +7,7 @@ use librazer::{
     blade18::{self, Change, Profile, State},
     types::*,
 };
-use std::{path::PathBuf, sync::mpsc, time::Duration};
+use std::{path::PathBuf, sync::mpsc};
 
 struct Job {
     receiver: mpsc::Receiver<Result<State, String>>,
@@ -30,6 +30,9 @@ struct BladeApp {
     shared_settings: std::sync::Arc<std::sync::Mutex<Settings>>,
     power_watcher: crate::blade_power::Watcher,
     power_updates: mpsc::Receiver<crate::blade_power::Update>,
+    power_error: Option<String>,
+    sensor_job: Option<mpsc::Receiver<Result<serde_json::Value, String>>>,
+    sensor_report: Option<serde_json::Value>,
 }
 impl BladeApp {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
@@ -69,6 +72,9 @@ impl BladeApp {
             shared_settings,
             power_watcher,
             power_updates,
+            power_error: None,
+            sensor_job: None,
+            sensor_report: None,
         };
         app.start(ctx, "Read device state", None, blade18::status);
         app
@@ -80,7 +86,7 @@ impl BladeApp {
         save_as: Option<bool>,
         operation: impl FnOnce() -> anyhow::Result<State> + Send + 'static,
     ) {
-        if self.job.is_some() {
+        if self.job.is_some() || self.sensor_job.is_some() {
             self.message = "Wait for the current device operation".into();
             return;
         }
@@ -159,7 +165,7 @@ impl BladeApp {
                 }
             }
             Action::Quit => {
-                if self.job.is_some() {
+                if self.job.is_some() || self.sensor_job.is_some() {
                     self.message = "Wait for the current operation before exiting".into();
                 } else {
                     self.quitting = true;
@@ -169,6 +175,27 @@ impl BladeApp {
         }
     }
     fn complete(&mut self) {
+        if let Some(receiver) = &self.sensor_job {
+            match receiver.try_recv() {
+                Ok(Ok(report)) => {
+                    self.report = serde_json::to_string_pretty(&report).unwrap_or_default();
+                    self.sensor_report = Some(report);
+                    self.sensor_job = None;
+                    self.message = "Controller sensor query complete; candidate readings need physical validation".into();
+                }
+                Ok(Err(error)) => {
+                    self.sensor_report = None;
+                    self.sensor_job = None;
+                    self.message = error;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.sensor_job = None;
+                    self.sensor_report = None;
+                    self.message = "Sensor worker stopped; retry the sensor query".into();
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
         let result = self.job.as_ref().map(|job| job.receiver.try_recv());
         match result {
             Some(Ok(result)) => {
@@ -221,6 +248,7 @@ impl eframe::App for BladeApp {
         }
         while let Ok(update) = self.power_updates.try_recv() {
             self.last_power = update.ac;
+            if let Some(error) = update.monitor_error { self.power_error = Some(error); }
             if let Some(result) = update.result {
                 match result {
                     Ok(state) => {
@@ -240,7 +268,7 @@ impl eframe::App for BladeApp {
                 }
             }
         }
-        if ctx.input(|input| input.viewport().close_requested()) && self.job.is_some() {
+        if ctx.input(|input| input.viewport().close_requested()) && (self.job.is_some() || self.sensor_job.is_some()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.message = "Wait for the current device operation before closing".into();
         } else if ctx.input(|input| input.viewport().close_requested())
@@ -250,8 +278,7 @@ impl eframe::App for BladeApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
         }
-        ctx.request_repaint_after(Duration::from_millis(200));
-        let idle = self.job.is_none();
+        let idle = self.job.is_none() && self.sensor_job.is_none();
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("R-Helper · Blade 18 (2025)");
             ui.horizontal(|ui| {
@@ -261,8 +288,9 @@ impl eframe::App for BladeApp {
                 if self.desktop.is_some() && ui.button("Hide to tray").clicked() { ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false)); }
                 if ui.add_enabled(idle, egui::Button::new("Exit")).clicked() { self.action(ctx, Action::Quit); }
             });
-            ui.label(&self.message); if self.job.is_some() { ui.spinner(); }
+            ui.label(&self.message); if !idle { ui.spinner(); }
             if let Some(error) = &self.desktop_error { ui.colored_label(egui::Color32::DARK_RED, error); }
+            if let Some(error) = &self.power_error { ui.colored_label(egui::Color32::DARK_RED, error); }
             egui::ScrollArea::vertical().show(ui, |ui| {
                 let mut requested = None;
                 if let Some(state) = &mut self.state {
@@ -299,6 +327,41 @@ impl eframe::App for BladeApp {
                     });
                 }
                 if let Some(change) = requested { self.start(ctx, "Apply setting", None, move || blade18::change(change)); }
+                ui.separator();
+                ui.strong("Controller sensors");
+                if ui.add_enabled(idle, egui::Button::new("Read controller sensors")).clicked() {
+                    let (sender, receiver) = mpsc::channel();
+                    self.sensor_job = Some(receiver);
+                    self.message = "Reading controller sensor candidates…".into();
+                    let repaint = ctx.clone();
+                    std::thread::spawn(move || {
+                        let _ = sender.send(librazer::diagnostics::collect_sensors().map_err(|error| format!("{error:#}")));
+                        repaint.request_repaint();
+                    });
+                }
+                ui.label("On-demand snapshots; third-fan mapping is pending. No third-fan writes or background sensor polling.");
+                if let Some(report) = &self.sensor_report {
+                    let getters = &report["sensor_candidates"]["getters"];
+                    for (key, label, rpm) in [
+                        ("controller_firmware", "Controller firmware", false),
+                        ("fan_zone_3_actual_rpm", "Third fan candidate · actual", true),
+                        ("fan_zone_3_stored_rpm", "Third fan candidate · stored target", true),
+                        ("ec_temperature_fields", "EC temperature candidates", false),
+                    ] {
+                        let reading = &getters[key];
+                        if reading["ok"] == true {
+                            if rpm {
+                                if let Some(value) = reading["response_args"][2].as_u64() { ui.label(format!("{label}: {} RPM", value * 100)); }
+                            } else if key == "controller_firmware" {
+                                let bytes = &reading["response_args"];
+                                ui.label(format!("{label}: {}.{}", bytes[0], bytes[1]));
+                            } else if key == "ec_temperature_fields" {
+                                let bytes = &reading["response_args"];
+                                ui.label(format!("EC sensor A: {} °C · sensor B: {} °C (candidate values; CPU/GPU die mapping unverified)", bytes[1], bytes[2]));
+                            } else { ui.label(format!("{label}: {} (raw bytes)", reading["response_args"])); }
+                        } else { ui.label(format!("{label}: unavailable · {}", reading["error"].as_str().unwrap_or("No valid reading"))); }
+                    }
+                }
                 ui.separator(); ui.strong("Saved profiles");
                 ui.add_enabled_ui(idle && self.settings_error.is_none(), |ui| {
                     ui.horizontal(|ui| {

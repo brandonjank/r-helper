@@ -62,12 +62,17 @@ impl Packet {
         let command = u16::from_be_bytes([self.command_class, self.command_id]);
         let args = &self.args[..usize::from(self.data_size).min(self.args.len())];
         let allowed = match command {
+            0x0081 => args == [0, 0],
+            0x0d85 => args == [0, 1, 0, 0],
             0x0383 => args == [1, 5, 0],
-            0x0380 | 0x0382 => args == [1, 4, 0],
+            0x0380 => args == [1, 4, 0],
+            0x0382 => args == [1, 4, 0] || args == [1, 5, 0],
+            0x0381 => args == [1, 4, 0, 0, 0] || args == [1, 5, 0, 0, 0],
             0x0084 => args == [0, 0],
             0x0792 | 0x078f => args == [0],
             0x0d82 => args == [0, 1, 0, 0] || args == [0, 2, 0, 0],
-            0x0d81 | 0x0d88 | 0x0d87 => args == [0, 1, 0] || args == [0, 2, 0],
+            0x0d81 | 0x0d88 => matches!(args, [0, 1..=3, 0]),
+            0x0d87 => args == [0, 1, 0] || args == [0, 2, 0],
             _ => false,
         };
         ensure!(allowed, "Command {command:04x} is blocked in diagnostic mode");
@@ -110,8 +115,17 @@ impl Packet {
         ensure!(
             self.remaining_packets == report.remaining_packets
             || (self.command_class, self.command_id) == (0x07, 0x92) /* 0x0792 (bho) has special handling */
-            || (self.command_class, self.command_id) == (0x07, 0x8f), /* 0x078f max fan speed mode has special handling */
-            "Response command does not match the report"
+            || (self.command_class, self.command_id) == (0x07, 0x8f) /* 0x078f max fan speed mode has special handling */
+            // Observed Blade 18 temperature response variant: wire bytes 00 03
+            // in the nominal packet-count field (little-endian decoded as 0300).
+            // Keep the exception specific to this command and payload shape.
+            || ((self.command_class, self.command_id) == (0x0d, 0x85)
+                && report.remaining_packets == 0
+                && self.remaining_packets == 0x0300
+                && self.data_size == 4
+                && self.args[0] == 2),
+            "Response packet count {} differs from request {}; status {:02x}, data length {}, first arguments {:?}",
+            self.remaining_packets, report.remaining_packets, self.status, self.data_size, &self.args[..8]
         );
 
         ensure!(self.status != CommandStatus::NotSupported as u8, "Command not supported");
@@ -196,5 +210,57 @@ mod diagnostic_tests {
         ] {
             assert!(Packet::new(cmd, &args).ensure_diagnostic_query().is_ok());
         }
+    }
+
+    #[test]
+    fn lighting_research_allows_only_source_backed_getters() {
+        assert!(Packet::new(0x0381, &[1, 4, 0, 0, 0]).ensure_diagnostic_query().is_ok());
+        assert!(Packet::new(0x0382, &[1, 5, 0]).ensure_diagnostic_query().is_ok());
+        for (cmd, args) in [
+            (0x0301, vec![1, 4, 255, 0, 0]),
+            (0x0381, vec![1, 6, 0, 0, 0]),
+            (0x0381, vec![1, 4, 0]),
+            (0x0382, vec![1, 9, 0]),
+        ] {
+            assert!(Packet::new(cmd, &args).ensure_diagnostic_query().is_err());
+        }
+    }
+
+    #[test]
+    fn sensor_discovery_does_not_enable_third_fan_writes_or_arbitrary_scans() {
+        for (cmd, args) in [
+            (0x0d88, vec![0, 3, 0]),
+            (0x0d81, vec![0, 3, 0]),
+            (0x0d85, vec![0, 1, 0, 0]),
+            (0x0081, vec![0, 0]),
+        ] {
+            assert!(Packet::new(cmd, &args).ensure_diagnostic_query().is_ok());
+        }
+        for (cmd, args) in [
+            (0x0d01, vec![0, 3, 40]),
+            (0x0d02, vec![1, 3, 0, 1]),
+            (0x0d88, vec![0, 4, 0]),
+            (0x0d85, vec![0, 4, 0, 0]),
+        ] {
+            assert!(Packet::new(cmd, &args).ensure_blade18_access().is_err());
+        }
+    }
+
+    #[test]
+    fn temperature_header_variant_requires_matching_command_and_payload() {
+        let report = Packet::new(0x0d85, &[0, 1, 0, 0]);
+        let mut response = Packet::new(0x0d85, &[2, 69, 45, 0]);
+        response.id = report.id;
+        response.status = 2;
+        response.remaining_packets = 0x0300;
+        assert!(response.ensure_matches_report(&report).is_ok());
+        response.remaining_packets = 0x0400;
+        assert!(response.ensure_matches_report(&report).is_err());
+        response.remaining_packets = 0x0300;
+        response.args[0] = 3;
+        assert!(response.ensure_matches_report(&report).is_err());
+        response.args[0] = 2;
+        response.command_id = 0x88;
+        assert!(response.ensure_matches_report(&report).is_err());
     }
 }

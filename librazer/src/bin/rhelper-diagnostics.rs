@@ -15,6 +15,12 @@ struct Args {
     /// Read status using the Blade 18 control interface verified on the development laptop.
     #[arg(long, conflicts_with = "probe_interface")]
     probe: bool,
+    /// Query source-backed LED RGB/effect getters on the verified endpoint. No writes or LED-ID sweep.
+    #[arg(long, conflicts_with_all = ["probe", "probe_interface", "validate_brightness", "validate_batch", "validate_fans", "restore_state"])]
+    probe_lighting: bool,
+    /// Read candidate controller temperatures, firmware, and third-fan getters. No writes or scan.
+    #[arg(long, conflicts_with_all = ["probe", "probe_interface", "probe_lighting", "validate_brightness", "validate_batch", "validate_fans", "validate_fan_zones", "restore_state"])]
+    probe_sensors: bool,
     /// Temporarily adjust brightness by 8/255, read back, then restore the original.
     #[arg(long, requires = "output", conflicts_with_all = ["probe", "probe_interface"])]
     validate_brightness: bool,
@@ -24,6 +30,9 @@ struct Args {
     /// Observe actual fan ramps at 4000/4500 RPM for up to 90 seconds, then restore.
     #[arg(long, requires = "output", conflicts_with_all = ["probe", "probe_interface", "validate_brightness", "validate_batch"])]
     validate_fans: bool,
+    /// Test unequal zone targets at 4000/4500 RPM in both directions for 60 seconds, then restore.
+    #[arg(long, requires = "output", conflicts_with_all = ["probe", "probe_interface", "probe_lighting", "validate_brightness", "validate_batch", "validate_fans", "restore_state"])]
+    validate_fan_zones: bool,
     /// Restore a model-tagged recovery snapshot created alongside a batch/fan report.
     #[arg(long, conflicts_with_all = ["output", "probe", "probe_interface", "validate_brightness", "validate_batch", "validate_fans"])]
     restore_state: Option<PathBuf>,
@@ -31,6 +40,10 @@ struct Args {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    if args.validate_fan_zones {
+        println!("{}", librazer::blade18::validate_fan_zones(args.output.as_ref().unwrap())?);
+        return Ok(());
+    }
     if let Some(path) = args.restore_state {
         println!("{}", serde_json::to_string_pretty(&librazer::blade18::restore_record(&path)?)?);
         return Ok(());
@@ -73,6 +86,10 @@ fn main() -> Result<()> {
         })?;
         failed_validation = !validation.passed;
         serde_json::json!({"brightness_validation": validation})
+    } else if args.probe_sensors {
+        librazer::diagnostics::collect_sensors()?
+    } else if args.probe_lighting {
+        librazer::diagnostics::collect_lighting()?
     } else if args.probe {
         librazer::diagnostics::collect_status()?
     } else {

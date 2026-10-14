@@ -2,7 +2,8 @@
 
 Development machine: Razer Blade 18, SKU `RZ09-05299ER9`, BIOS `2.01`
 (BIOS date `08/04/2025`), RTX 5090 configuration reported by its owner.
-Validation performed 2026-10-14. GPU identity has not yet been independently captured.
+Validation performed 2026-10-14. WMI and NVIDIA independently identify the GPU as
+NVIDIA GeForce RTX 5090 Laptop GPU during the follow-up investigation.
 
 ## Identity and transport
 
@@ -124,3 +125,31 @@ recovery command was also run against the captured original state and verified b
 176, Static logo, battery care disabled, Balanced/Auto, CPU Medium/GPU Low, and stored
 fan setpoints 2000/2000. Automatic profile switching is enabled with Balanced AC and
 Silent battery profiles. Static analysis completed with warnings in legacy code.
+## Follow-up discovery and idle optimization (2026-10-14)
+
+- Unequal main-fan targets 4000/4500 and 4500/4000 RPM read back independently;
+  actual RPM responded separately. The 60-second test restored the captured
+  Performance/Auto state, brightness 176, static logo, battery care disabled and
+  stored targets 2000/2000. Physical CPU/GPU zone mapping remains pending.
+- Read-only selector 3 returns a stored target of 3000 RPM; actual samples changed
+  from 0 to 1300 and 1800 RPM during follow-up observations.
+  These are candidate third-fan readings; no third-zone writes are enabled.
+- Controller firmware getter returns 1.6. The temperature getter returns two
+  candidate EC fields, sampled at 69/45 C, after accepting an explicitly checked
+  response-header variant. NVIDIA independently reported 45 C immediately afterward.
+  CPU/GPU die accuracy, update rate and load correlation remain unverified.
+- Standard LED 4/5 RGB getters and LED 5 effect getter return NotSupported on the
+  verified endpoint. This does not establish that the physical zones lack RGB;
+  model-specific Synapse traffic capture is the next investigation step.
+- No present VID 1534 devices found. Passive inventory now includes both requested
+  VIDs, while control access stays restricted to the verified 1532:02c7 endpoint.
+- Removed the 200 ms idle UI repaint loop and replaced the 100 ms watcher wake loop
+  with native Windows power notifications. An explicit 30-second fallback is used
+  only if registration fails. Short AC-powered 30-second process samples used
+  0.34375 CPU seconds before and 0.0625 after; these are not battery-energy tests.
+- Nineteen automated tests pass, including native notification registration,
+  shutdown, packet restrictions and the exact temperature response variant.
+  The optimized Windows build and on-demand controller sensor GUI are verified.
+  Physical power-transition revalidation with the new event backend is pending.
+
+See [research and milestones](blade18-roadmap.md) for the feature plan and sources.
