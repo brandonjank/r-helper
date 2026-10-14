@@ -67,6 +67,7 @@ fn run(directory: PathBuf) -> Result<()> {
         p.hardware.brightness = original.hardware.brightness.saturating_sub(8);
         p.lighting.brightness = p.hardware.brightness;
         p.lighting.style = blade18::lighting::Style::DualBreathing;
+        p.lighting.speed = None;
         p.apply()?;
         ensure!(
             blade18::status()?.brightness == p.hardware.brightness,

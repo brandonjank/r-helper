@@ -63,8 +63,11 @@ impl Packet {
                 [1, 5, 1 | 2, 0, 1, 1, _, _, _]
                     | [1, 5, 2, 0, 1, 2, _, _, _, _, _, _]
                     | [1, 5, 4, 1 | 2, 40, 0]
-                    | [1, 5, 5, 0, 2, 1, _, _, _]
+                    | [1, 5, 5, 0, 1..=4, 1, _, _, _]
                     | [1, 5, 8, 0, 0, 0]
+                    | [1, 5, 0, 0, 0, 0]
+                    | [1, 5, 7, 0, 1..=3, 2, _, _, _, _, _, _]
+                    | [1, 5, 6, 0, 2, 1, _, _, _]
             ),
             0x0f03 => {
                 args.len() == 62 && args[0..2] == [0, 5] && args[2] < 6 && args[3..5] == [0, 18]
@@ -75,6 +78,9 @@ impl Packet {
             0x0302 => matches!(args, [1, 4, 0 | 2]),
             0x0712 => matches!(args, [0x50 | 0xd0]),
             0x070f => matches!(args, [8 | 12]),
+            0x0206 => matches!(args, [0 | 1, 0 | 1]),
+            0x0008 => matches!(args, [0 | 1, 0, 0, 0]),
+            0x0f10 => matches!(args, [0 | 1]),
             0x0d02 => {
                 matches!(args, [1, 1 | 2, 0 | 2 | 4 | 5 | 6 | 7, 0 | 1] | [0, 1 | 2, 0, 0 | 1])
             }
@@ -101,6 +107,21 @@ impl Packet {
         let command = u16::from_be_bytes([self.command_class, self.command_id]);
         let args = &self.args[..usize::from(self.data_size).min(self.args.len())];
         let allowed = match command {
+            // Source-backed keyboard/lighting discovery. Fixed profiles only;
+            // no remapping, test mode, reset, firmware or selector scans.
+            0x0088 => args == [0; 4],
+            0x0389 => args == [0; 80],
+            0x0286 => matches!(args, [0 | 1, 0]),
+            0x02a8 | 0x02a4 => args == [0],
+            0x00dd => args == [1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            0x00da => args == [1, 0, 0],
+            0x0f86 => args == [1, 0],
+            0x0f90 => args == [0],
+            0x0f94 => args == [1, 0],
+            0x0782 | 0x0790 | 0x0795 => args == [0],
+            0x0783 | 0x0788 => args == [0, 0],
+            0x078b => args == [0; 5],
+            0x0793 => args == [1, 0, 0],
             0x0081 => args == [0, 0],
             0x0d85 => args == [0, 1, 0, 0],
             // Vendor model-711 middleware: fixed-shape capability getters only.
@@ -168,6 +189,9 @@ impl Packet {
 
     pub fn get_args(&self) -> &[u8] {
         &self.args
+    }
+    pub(crate) fn payload(&self) -> &[u8] {
+        &self.args[..usize::from(self.data_size).min(self.args.len())]
     }
 
     pub fn ensure_matches_report(&self, report: &Packet) -> Result<()> {
@@ -325,7 +349,7 @@ mod diagnostic_tests {
         assert!(reply.ensure_matches_report(&request).is_err());
     }
     #[test]
-    fn static_keyboard_setter_cannot_write_other_regions_effects_or_frames() {
+    fn keyboard_headers_cannot_escape_audited_effect_shapes() {
         let valid = [1, 5, 1, 0, 1, 1, 32, 64, 255];
         assert!(Packet::new(0x0f02, &valid).ensure_blade18_access().is_ok());
         assert!(Packet::new(0x0f02, &valid).ensure_diagnostic_query().is_err());
@@ -335,7 +359,7 @@ mod diagnostic_tests {
                 args[field] = value;
                 assert_eq!(
                     Packet::new(0x0f02, &args).ensure_blade18_access().is_ok(),
-                    value == valid[field] || (field == 2 && value == 2)
+                    value == valid[field] || (field == 2 && matches!(value, 2 | 5))
                 );
             }
         }
@@ -559,6 +583,52 @@ mod diagnostic_tests {
         response.args[0] = 2;
         response.command_id = 0x88;
         assert!(response.ensure_matches_report(&report).is_err());
+    }
+
+    #[test]
+    fn extended_controls_keep_getters_separate_and_reject_unverified_modes() {
+        for (command, args) in
+            [(0x0286, vec![1, 0]), (0x0088, vec![0; 4]), (0x0f90, vec![0]), (0x0389, vec![0; 80])]
+        {
+            assert!(Packet::new(command, &args).ensure_diagnostic_query().is_ok());
+        }
+        for (command, args) in [(0x0206, vec![1, 1]), (0x0008, vec![1, 0, 0, 0]), (0x0f10, vec![1])]
+        {
+            let p = Packet::new(command, &args);
+            assert!(p.ensure_diagnostic_query().is_err());
+            assert!(p.ensure_blade18_access().is_ok());
+        }
+        for (command, args) in [
+            (0x0206, vec![2, 1]),
+            (0x0206, vec![1, 2]),
+            (0x0008, vec![3, 0, 0, 0]),
+            (0x0713, vec![1, 1, 1]),
+            (0x0004, vec![3, 0]),
+            (0x000b, vec![1]),
+        ] {
+            assert!(Packet::new(command, &args).ensure_blade18_access().is_err());
+        }
+    }
+    #[test]
+    fn firmware_effect_timing_and_color_counts_are_bounded() {
+        for args in [
+            vec![1, 5, 4, 2, 40, 0],
+            vec![1, 5, 5, 0, 4, 1, 1, 2, 3],
+            vec![1, 5, 7, 0, 3, 2, 1, 2, 3, 4, 5, 6],
+            vec![1, 5, 6, 0, 2, 1, 1, 2, 3],
+            vec![1, 5, 0, 0, 0, 0],
+        ] {
+            assert!(Packet::new(0x0f02, &args).ensure_blade18_access().is_ok());
+        }
+        for args in [
+            vec![1, 5, 4, 2, 15, 0],
+            vec![1, 5, 4, 2, 16, 0],
+            vec![1, 5, 5, 0, 5, 1, 1, 2, 3],
+            vec![1, 5, 7, 0, 0, 2, 1, 2, 3, 4, 5, 6],
+            vec![1, 5, 3, 0, 0, 0],
+        ] {
+            assert!(Packet::new(0x0f02, &args).ensure_blade18_access().is_err());
+        }
     }
 
     #[test]

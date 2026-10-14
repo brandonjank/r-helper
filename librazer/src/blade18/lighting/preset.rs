@@ -33,12 +33,15 @@ fn persist(preset: &Preset) -> Result<()> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Style {
+    Off,
     Static,
     Breathing,
     DualBreathing,
     WaveLeft,
     WaveRight,
     Reactive,
+    Starlight,
+    Ripple,
     PerKey,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -52,21 +55,38 @@ pub struct Preset {
     pub underside: bool,
     pub underside_brightness: u8,
     pub logo: crate::types::LogoMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed: Option<u8>,
 }
 impl Preset {
     pub fn validate(&self) -> Result<()> {
         ensure!(self.keys.len() == 114, "Keyboard map must contain 6 × 19 colors");
+        if let Some(speed) = self.speed {
+            ensure!(
+                match self.style {
+                    Style::WaveLeft | Style::WaveRight => speed == 40,
+                    Style::Reactive => (1..=4).contains(&speed),
+                    Style::Starlight => (1..=3).contains(&speed),
+                    Style::Ripple => speed == 2,
+                    _ => false,
+                },
+                "Timing value is not supported for this effect"
+            );
+        }
         Ok(())
     }
     fn packet(&self) -> Vec<u8> {
         let (id, flags, rate, colors) = match self.style {
+            Style::Off => (0, 0, 0, vec![]),
             Style::Static => (1, 0, 1, vec![self.color]),
             Style::Breathing => (2, 0, 1, vec![self.color]),
             Style::DualBreathing => (2, 0, 1, vec![self.color, self.second]),
             // Directions verified visually on the Blade 18 from the typing position.
-            Style::WaveLeft => (4, 2, 40, vec![]),
-            Style::WaveRight => (4, 1, 40, vec![]),
-            Style::Reactive => (5, 0, 2, vec![self.color]),
+            Style::WaveLeft => (4, 2, self.speed.unwrap_or(40), vec![]),
+            Style::WaveRight => (4, 1, self.speed.unwrap_or(40), vec![]),
+            Style::Reactive => (5, 0, self.speed.unwrap_or(2), vec![self.color]),
+            Style::Starlight => (7, 0, self.speed.unwrap_or(2), vec![self.color, self.second]),
+            Style::Ripple => (6, 0, 2, vec![self.color]),
             Style::PerKey => (8, 0, 0, vec![]),
         };
         let mut p = vec![1, 5, id, flags, rate, colors.len() as u8];
@@ -87,6 +107,7 @@ impl Preset {
             return Ok(p);
         }
         let style = match (d.get(2), d.get(5)) {
+            (Some(0), Some(0)) => Style::Off,
             (Some(1), Some(1)) => Style::Static,
             (Some(2), Some(1)) => Style::Breathing,
             (Some(2), Some(2)) => Style::DualBreathing,
@@ -98,6 +119,8 @@ impl Preset {
                 }
             }
             (Some(5), Some(1)) => Style::Reactive,
+            (Some(7), Some(2)) => Style::Starlight,
+            (Some(6), Some(1)) => Style::Ripple,
             _ => anyhow::bail!(
                 "Current Chroma pixels cannot be captured; apply an R-Helper effect first"
             ),
@@ -112,7 +135,16 @@ impl Preset {
             underside: s.underside,
             underside_brightness: s.underside_brightness,
             logo,
+            speed: if matches!(
+                style,
+                Style::WaveLeft | Style::WaveRight | Style::Reactive | Style::Starlight
+            ) {
+                Some(d[4])
+            } else {
+                None
+            },
         };
+        preset.validate()?;
         ensure!(
             preset.matches(s),
             "Current effect parameters cannot be captured exactly; apply an R-Helper effect first"
@@ -151,6 +183,7 @@ impl Preset {
     }
     pub fn apply(&self, path: &Path) -> Result<Lighting> {
         self.validate()?;
+        super::super::lamp_array::release();
         let mut file = File::options().create_new(true).write(true).open(path)?;
         let device = open()?;
         let before = read(&device)?;
@@ -202,12 +235,15 @@ impl Preset {
 impl Style {
     pub fn label(self) -> &'static str {
         match self {
+            Self::Off => "Off",
             Self::Static => "Static",
             Self::Breathing => "Breathing",
             Self::DualBreathing => "Two-color breathing",
             Self::WaveLeft => "Wave left",
             Self::WaveRight => "Wave right",
             Self::Reactive => "Reactive",
+            Self::Starlight => "Starlight · visual test pending",
+            Self::Ripple => "Ripple · visual test pending",
             Self::PerKey => "Per-key colors",
         }
     }

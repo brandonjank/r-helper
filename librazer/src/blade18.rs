@@ -19,6 +19,8 @@ pub const MANUAL_FANS_VERIFIED: bool = true;
 
 pub mod charge;
 mod curve_lab;
+pub mod extended;
+pub mod lamp_array;
 pub mod lighting;
 pub use curve_lab::{test_curves, CurveFault};
 mod curve_session;
@@ -319,6 +321,7 @@ pub fn restore_record(path: &Path) -> Result<State> {
 
 pub fn change(change: Change) -> Result<State> {
     validate_change(&change)?;
+    lamp_array::release();
     ensure!(
         !matches!(change, Change::ManualFans(_) | Change::ManualFanZones(_))
             || MANUAL_FANS_VERIFIED,
@@ -375,6 +378,7 @@ impl Profile {
 
 pub fn apply_profile(profile: &Profile) -> Result<State> {
     profile.validate(!ac_connected()?)?;
+    lamp_array::release();
     let device = open()?;
     let original = read(&device)?;
     let result = (|| -> Result<State> {

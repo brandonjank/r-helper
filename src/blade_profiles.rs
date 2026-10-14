@@ -28,6 +28,8 @@ pub struct Settings {
     pub application_switching: bool,
     #[serde(default)]
     pub lighting_policy: LightingPolicy,
+    #[serde(default)]
+    pub manage_razer_software: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -139,6 +141,7 @@ impl Default for Settings {
             named: vec![],
             application_switching: false,
             lighting_policy: LightingPolicy::default(),
+            manage_razer_software: false,
         }
     }
 }
@@ -230,6 +233,7 @@ pub fn import(data: &str) -> Result<Settings> {
     settings.automatic = false;
     settings.application_switching = false;
     settings.lighting_policy.enabled = false;
+    settings.manage_razer_software = false;
     Ok(settings)
 }
 pub fn save(path: &Path, settings: &Settings) -> Result<()> {
@@ -272,6 +276,7 @@ mod tests {
                 gpu: Some(librazer::types::GpuBoost::Low),
             },
             lighting: librazer::blade18::lighting::Preset {
+                speed: None,
                 style: librazer::blade18::lighting::Style::Static,
                 color: [32, 64, 255],
                 second: [255, 64, 32],
@@ -301,6 +306,7 @@ mod tests {
             ..Default::default()
         };
         settings.lighting_policy.enabled = true;
+        settings.manage_razer_software = true;
         for i in 0..32 {
             let mut p = p.clone();
             p.name = format!("Profile {i}");
@@ -313,6 +319,7 @@ mod tests {
             !imported.automatic
                 && !imported.application_switching
                 && !imported.lighting_policy.enabled
+                && !imported.manage_razer_software
         );
         settings.named.push(named());
         assert!(settings.validate().is_err());

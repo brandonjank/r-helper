@@ -10,6 +10,7 @@ use librazer::{
 use std::{path::PathBuf, sync::mpsc};
 mod batch;
 mod curves;
+mod extended;
 mod view;
 
 struct Job {
@@ -18,6 +19,13 @@ struct Job {
     label: String,
 }
 struct BladeApp {
+    vendor: crate::blade_vendor::Ui,
+    extended: Option<serde_json::Value>,
+    controller_telemetry: Option<serde_json::Value>,
+    lamp_report: Option<serde_json::Value>,
+    lamp_color: [u8; 3],
+    lamp_highlight: bool,
+    lamp_index: u8,
     batch: batch::BatchUi,
     state: Option<State>,
     job: Option<Job>,
@@ -85,6 +93,13 @@ impl BladeApp {
             curve_control.clone(),
         );
         let mut app = Self {
+            vendor: crate::blade_vendor::Ui::default(),
+            extended: None,
+            controller_telemetry: None,
+            lamp_report: None,
+            lamp_color: [32, 64, 255],
+            lamp_highlight: false,
+            lamp_index: 1,
             batch: batch::BatchUi::default(),
             state: None,
             job: None,
@@ -123,6 +138,9 @@ impl BladeApp {
             app.curve_control.clone(),
         );
         app.batch.watcher = Some(watcher);
+        if app.settings.manage_razer_software {
+            app.vendor.start(ctx, app.curve_control.clone());
+        }
         app.batch.updates = Some(updates);
         app.start(ctx, "Read device state", None, blade18::status);
         app
@@ -332,6 +350,13 @@ impl BladeApp {
         if let Some(receiver) = &self.sensor_job {
             match receiver.try_recv() {
                 Ok(Ok(report)) => {
+                    let completion_message = if report["lamp_preview"].is_object() {
+                        "Auxiliary RGB preview requested · 15 seconds · color readback unavailable"
+                    } else if report["keyboard_batch"]["passed"] == true {
+                        "Keyboard checks passed · original values restored"
+                    } else {
+                        "Controller query complete · exported report available"
+                    };
                     self.report = serde_json::to_string_pretty(&report).unwrap_or_default();
                     if report["device_state"].is_object() {
                         self.state = serde_json::from_value(report["device_state"].clone()).ok();
@@ -363,6 +388,12 @@ impl BladeApp {
                             if effect.len() == 9 && matches!(effect[2], 1 | 2) {
                                 self.keyboard_color.copy_from_slice(&effect[6..9]);
                             }
+                        }
+                    } else if report["extended_controls"].is_array() {
+                        self.extended = Some(report["extended_controls"].clone());
+                        self.controller_telemetry = Some(report["controller_telemetry"].clone());
+                        if report["lamp_inventory"].is_object() {
+                            self.lamp_report = Some(report["lamp_inventory"].clone());
                         }
                     } else if report["display_controls"].is_object() {
                         self.display =
@@ -409,7 +440,7 @@ impl BladeApp {
                         self.sensor_report = Some(report);
                     }
                     self.sensor_job = None;
-                    self.message = "Controller query complete · exported report available".into();
+                    self.message = completion_message.into();
                 }
                 Ok(Err(error)) => {
                     self.display = None;
@@ -537,6 +568,8 @@ impl eframe::App for BladeApp {
         if self.state.as_ref().is_some_and(|state| state.fan_mode == FanMode::Manual) {
             let _ = blade18::change(Change::AutoFans);
         }
+        self.vendor.shutdown();
+        blade18::lamp_array::release();
     }
 }
 pub fn run() -> Result<(), eframe::Error> {

@@ -31,7 +31,7 @@ pub(super) fn card(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::
     ui.add_space(4.0);
 }
 
-fn hint(ui: &mut egui::Ui, text: impl Into<String>) {
+pub(super) fn hint(ui: &mut egui::Ui, text: impl Into<String>) {
     ui.label(RichText::new(text.into()).small().color(MUTED));
 }
 
@@ -74,6 +74,13 @@ impl BladeApp {
         let settings = Settings { ac: Some(Profile::capture(&state)), ..Settings::default() };
         let (_, power_updates) = mpsc::channel();
         Self {
+            vendor: crate::blade_vendor::Ui::default(),
+            extended: None,
+            controller_telemetry: None,
+            lamp_report: None,
+            lamp_color: [32, 64, 255],
+            lamp_highlight: false,
+            lamp_index: 1,
             batch: super::batch::BatchUi::default(),
             state: Some(state),
             job: None,
@@ -112,8 +119,12 @@ impl BladeApp {
     }
 
     pub(super) fn render(&mut self, ctx: &egui::Context, idle: bool) {
-        let enabled =
-            idle && !self.preview && self.curve_events.is_none() && self.batch.pending.is_none();
+        self.vendor.poll(ctx);
+        let enabled = idle
+            && !self.preview
+            && !self.vendor.busy()
+            && self.curve_events.is_none()
+            && self.batch.pending.is_none();
         let footer_height = 105.0
             + 20.0
                 * [&self.desktop_error, &self.power_error, &self.settings_error]
@@ -143,6 +154,13 @@ impl BladeApp {
             ui.add_space(10.0);
             if self.preview { ui.colored_label(ACCENT, "PREVIEW · sample data · controls disabled"); }
             egui::ScrollArea::vertical().max_height((ui.available_height() - footer_height).max(180.0)).auto_shrink([false, false]).show(ui, |ui| {
+                card(ui,"Laptop control ownership",|ui| {
+                    let summary=if self.vendor.message.is_empty(){"Razer software takeover is off"}else{self.vendor.message.as_str()};
+                    ui.add(egui::Label::new(summary).truncate()).on_hover_text(summary);
+                    ui.collapsing("Manage Razer software",|ui| {
+                        if self.vendor.render(ui,ctx,enabled,&mut self.settings.manage_razer_software,self.curve_control.clone()){self.persist();}
+                    });
+                });
                 if let Some(state) = &mut self.state {
                     card(ui, "Performance", |ui| {
                         ui.add_enabled_ui(enabled, |ui| {
@@ -254,6 +272,7 @@ let mut underside=lighting.underside;
                 }
                 self.curve_editor(ui,ctx,idle);
                 self.batch_controls(ui,ctx,enabled);
+                self.extended_controls(ui,ctx,enabled);
                 // Profile actions require mutable app access after the state borrow ends.
                 card(ui, "Power profiles", |ui| {
                     for ac in [true, false] {

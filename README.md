@@ -5,6 +5,12 @@ based on [Fatalution/r-helper](https://github.com/Fatalution/r-helper).
 
 ## Blade 18 (2025)
 
+The 0.6.0 test candidate adds verified Fn-primary/gaming controls, Starlight/Ripple,
+effect timing choices, a Windows lighting map and a timed preview for 18 newly
+discovered auxiliary RGB lamps. It also adds reversible Razer-software takeover;
+the privileged service test and physical auxiliary-zone mapping remain pending.
+See [extended controls and the return-to-desk test batch](docs/blade18-extended-controls.md).
+
 Version 0.5.0 adds firmware keyboard effects and experimental per-key colors,
 AC/battery lighting presets and power policies, named application profiles,
 charge-once request/cancel, and guarded display changes with color-profile information.

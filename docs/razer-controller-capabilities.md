@@ -1,5 +1,10 @@
 # Blade 18 controller capability inventory
 
+See the [0.6.0 extended-controls candidate](blade18-extended-controls.md) for
+Fn-primary and gaming switches, Starlight/Ripple, additional timing choices and a
+separate standard Windows lighting interface with 18 auxiliary RGB lamps. Physical
+zone mapping and privileged vendor-software takeover still need owner tests.
+
 See the [controller discovery pass](blade18-discovery.md) for newly verified
 charger telemetry, the charge-once bit path, unsupported PWM getters and the
 distinction between unused library methods and actual hidden hardware features.

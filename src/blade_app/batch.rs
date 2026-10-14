@@ -22,6 +22,7 @@ impl Default for BatchUi {
                 underside: false,
                 underside_brightness: 64,
                 logo: LogoMode::Static,
+                speed: None,
             },
             name: "My profile".into(),
             selected: 0,
@@ -34,7 +35,7 @@ impl Default for BatchUi {
     }
 }
 impl BladeApp {
-    fn batch_job(
+    pub(super) fn batch_job(
         &mut self,
         ctx: &egui::Context,
         label: &str,
@@ -121,9 +122,11 @@ impl BladeApp {
         super::view::card(ui, "Keyboard effects + lighting profiles", |ui| {
             ui.add_enabled_ui(enabled,|ui|{
                 egui::ComboBox::from_id_salt("full_keyboard_effect").selected_text(self.batch.draft.style.label()).show_ui(ui,|ui|{
-                    for (style,name) in [(Style::Static,"Static"),(Style::Breathing,"Breathing"),(Style::DualBreathing,"Two-color breathing"),(Style::WaveLeft,"Wave left"),(Style::WaveRight,"Wave right"),(Style::Reactive,"Reactive"),(Style::PerKey,"Per-key colors")]{ui.selectable_value(&mut self.batch.draft.style,style,name);}
+                    for style in [Style::Off,Style::Static,Style::Breathing,Style::DualBreathing,Style::WaveLeft,Style::WaveRight,Style::Reactive,Style::Starlight,Style::Ripple,Style::PerKey]{if ui.selectable_value(&mut self.batch.draft.style,style,style.label()).changed(){self.batch.draft.speed=None;}}
                 });
-                ui.horizontal(|ui|{ui.label("Color");ui.color_edit_button_srgb(&mut self.batch.draft.color);if matches!(self.batch.draft.style,Style::DualBreathing|Style::PerKey){ui.label("Second");ui.color_edit_button_srgb(&mut self.batch.draft.second);}});
+                ui.horizontal(|ui|{ui.label("Color");ui.color_edit_button_srgb(&mut self.batch.draft.color);if matches!(self.batch.draft.style,Style::DualBreathing|Style::Starlight|Style::PerKey){ui.label("Second");ui.color_edit_button_srgb(&mut self.batch.draft.second);}});
+                let timings:Vec<(&str,u8)>=match self.batch.draft.style {Style::Reactive=>vec![("Short",1),("Medium",2),("Long",3),("Longest",4)],Style::Starlight=>vec![("Short",1),("Medium",2),("Long",3)],_=>vec![]};
+                if !timings.is_empty(){ui.horizontal_wrapped(|ui|{ui.label("Timing");for(name,value) in timings {if ui.selectable_label(self.batch.draft.speed.unwrap_or(if matches!(self.batch.draft.style,Style::WaveLeft|Style::WaveRight){40}else{2})==value,name).clicked(){self.batch.draft.speed=Some(value);}}});}
                 if self.batch.draft.style==Style::PerKey {
                     ui.label("Pick a color above, then paint cells. Apply sends one static map.");
                     ui.horizontal(|ui|{if ui.button("Fill all").clicked(){self.batch.draft.keys.fill(self.batch.draft.color);}if ui.button("Alternate rows").clicked(){for (i,c) in self.batch.draft.keys.iter_mut().enumerate(){*c=if i/19%2==0{self.batch.draft.color}else{self.batch.draft.second};}}});
@@ -177,7 +180,7 @@ impl BladeApp {
                     ui.add(egui::TextEdit::multiline(&mut self.batch.transfer).desired_rows(4).hint_text("Paste an exported R-Helper profile file here"));
                     if ui.button("Import profiles JSON").clicked(){
                         let result=blade_profiles::import(&self.batch.transfer);
-                        match result{Ok(settings)=>{self.settings=settings;save=true;},Err(e)=>self.message=format!("Import rejected; current profiles preserved: {e:#}")}
+                        match result{Ok(settings)=>{self.vendor.stop(ctx);self.settings=settings;save=true;},Err(e)=>self.message=format!("Import rejected; current profiles preserved: {e:#}")}
                     }
                     ui.small("Import leaves automatic switching and lighting policies off until you enable them.");
                 });

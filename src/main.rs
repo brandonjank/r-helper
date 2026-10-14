@@ -8,6 +8,7 @@ mod blade_display;
 mod blade_policy;
 mod blade_power;
 mod blade_profiles;
+mod blade_vendor;
 mod device;
 mod messaging;
 mod power;
@@ -1312,6 +1313,13 @@ fn set_windows_app_id() {
 fn set_windows_app_id() {}
 
 fn main() -> Result<(), eframe::Error> {
+    if let Some(result) = blade_vendor::dispatch() {
+        if let Err(error) = result {
+            eprintln!("Razer ownership: {error:#}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     if let Some(result) = blade_batch_test::dispatch() {
         if let Err(error) = result {
             eprintln!("Batch test: {error:#}");
@@ -1334,6 +1342,11 @@ fn main() -> Result<(), eframe::Error> {
         return blade_app::run_preview();
     }
     if librazer::diagnostics::is_target_system() {
+        let _instance = match blade_vendor::UiInstance::acquire() {
+            Ok(Some(lease)) => lease,
+            Ok(None) => return Ok(()),
+            Err(error) => return Err(eframe::Error::AppCreation(error.into())),
+        };
         return blade_app::run();
     }
     let initial_height = 500.0;
