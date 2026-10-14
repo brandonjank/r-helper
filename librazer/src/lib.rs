@@ -5,4 +5,5 @@ pub mod types;
 
 pub mod descriptor;
 pub mod diagnostics;
+pub mod brightness;
 mod packet;

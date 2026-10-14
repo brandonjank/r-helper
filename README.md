@@ -11,8 +11,20 @@ based on [Fatalution/r-helper](https://github.com/Fatalution/r-helper).
 The `RZ09-0529` / USB `1532:02c7` is recognized in a dedicated diagnostics screen.
 On this model, launching `rhelper.exe` opens diagnostics instead of the upstream control UI.
 Inventory is passive; **Read device status** explicitly sends audited getter requests.
-Setting commands are blocked on diagnostic device handles. No initialization commands are sent.
-Performance, fans, battery care, and lighting setters remain pending validation.
+Setting commands are blocked on diagnostic device handles. A separate, narrowly scoped
+brightness handle permits only the keyboard brightness setter plus audited getters.
+No initialization commands are sent. Performance, fans, battery care, and logo setters
+remain pending validation.
+
+Keyboard brightness passed a live 176 → 168 → 176 round trip with matching readbacks.
+Use **Read brightness**, adjust the slider, then **Apply brightness**. The app verifies
+the result and attempts to restore the previous value if the update fails.
+
+To repeat the temporary validation with a recovery record written before the first change:
+
+```powershell
+cargo run -p librazer --bin rhelper-diagnostics -- --validate-brightness --output brightness-test.json
+```
 
 The console utility exports JSON without serial numbers, usernames, or HID device paths:
 
@@ -25,7 +37,7 @@ cargo run -p librazer --bin rhelper-diagnostics -- --probe --output status.json
 `--probe-interface INDEX` is available for explicit interface investigation; indices are
 local to each inventory and can change. Output files must not already exist.
 An individual failed getter is reported in JSON and does not imply a zero/default value.
-Successful getter responses establish read support only, not safe setting ranges.
+Successful getter responses establish read support only, not safe setting ranges for other controls.
 
 See [Blade 18 validation](docs/blade18-validation.md) for observed results and next steps.
 

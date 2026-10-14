@@ -90,6 +90,23 @@ pub fn collect_status() -> Result<Value> {
     collect_impl(None, true)
 }
 
+pub(crate) fn open_blade18_diagnostic() -> Result<Device> {
+    ensure!(is_target_system(), "Brightness access requires a Blade 18 (2025)");
+    let api = hidapi::HidApi::new()?;
+    let matches: Vec<_> = api
+        .device_list()
+        .filter(|d| {
+            d.vendor_id() == 0x1532
+                && d.product_id() == BLADE_18_2025.pid
+                && d.interface_number() == 2
+                && d.usage_page() == 1
+                && d.usage() == 2
+        })
+        .collect();
+    ensure!(matches.len() == 1, "Expected exactly one Blade 18 control interface");
+    Device::open_diagnostic(&api, matches[0], BLADE_18_2025)
+}
+
 fn collect_impl(probe_interface: Option<usize>, preferred: bool) -> Result<Value> {
     let bios = bios();
     let api = hidapi::HidApi::new().context("Cannot enumerate HID interfaces")?;

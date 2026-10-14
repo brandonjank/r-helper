@@ -28,6 +28,16 @@ enum CommandStatus {
 }
 
 impl Packet {
+    pub(crate) fn ensure_brightness_access(&self) -> Result<()> {
+        if self.command_class == 0x03
+            && self.command_id == 0x03
+            && self.data_size == 3
+            && self.args[..2] == [1, 5]
+        {
+            return Ok(());
+        }
+        self.ensure_diagnostic_query()
+    }
     /// Only audited getter packets may pass through a diagnostic device.
     pub(crate) fn ensure_diagnostic_query(&self) -> Result<()> {
         let command = u16::from_be_bytes([self.command_class, self.command_id]);
@@ -116,6 +126,20 @@ impl TryFrom<&[u8]> for Packet {
 #[cfg(test)]
 mod diagnostic_tests {
     use super::Packet;
+
+    #[test]
+    fn brightness_access_does_not_enable_other_setters() {
+        assert!(Packet::new(0x0303, &[1, 5, 160]).ensure_brightness_access().is_ok());
+        for (cmd, args) in [
+            (0x0303, vec![1, 4, 160]),
+            (0x0303, vec![1, 5]),
+            (0x0300, vec![1, 4, 1]),
+            (0x0d02, vec![1, 1, 0, 0]),
+            (0x0712, vec![1]),
+        ] {
+            assert!(Packet::new(cmd, &args).ensure_brightness_access().is_err());
+        }
+    }
 
     #[test]
     fn diagnostics_reject_setters_and_unreviewed_arguments() {
