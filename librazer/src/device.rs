@@ -9,6 +9,8 @@ pub struct Device {
     pub info: Descriptor,
     read_only: bool,
     keyboard_brightness_only: bool,
+    blade18_control: bool,
+    _control_lock: Option<std::fs::File>,
 }
 
 // Read the model id and clip to conform with https://mysupport.razer.com/app/answers/detail/a_id/5481
@@ -46,6 +48,8 @@ impl Device {
                     info: descriptor.clone(),
                     read_only: false,
                     keyboard_brightness_only: false,
+                    blade18_control: false,
+                    _control_lock: None,
                 });
             }
         }
@@ -54,7 +58,9 @@ impl Device {
 
     pub fn send(&self, report: Packet) -> Result<Packet> {
         if self.read_only {
-            if self.keyboard_brightness_only {
+            if self.blade18_control {
+                report.ensure_blade18_access()?;
+            } else if self.keyboard_brightness_only {
                 report.ensure_brightness_access()?;
             } else {
                 report.ensure_diagnostic_query()?;
@@ -111,11 +117,41 @@ impl Device {
         descriptor: Descriptor,
     ) -> Result<Self> {
         anyhow::ensure!(info.vendor_id() == Self::RAZER_VID && info.product_id() == descriptor.pid);
+        #[cfg(windows)]
+        let control_lock = {
+            use std::os::windows::fs::OpenOptionsExt;
+            let path = std::env::temp_dir().join("rhelper-blade18-hardware.lock");
+            let mut result = None;
+            for _ in 0..50 {
+                match std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create(true)
+                    .truncate(false)
+                    .share_mode(0)
+                    .open(&path)
+                {
+                    Ok(file) => {
+                        result = Some(file);
+                        break;
+                    }
+                    Err(error) if error.raw_os_error() == Some(32) => {
+                        thread::sleep(time::Duration::from_millis(100))
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            Some(result.context("Another R-Helper operation owns the hardware; try again")?)
+        };
+        #[cfg(not(windows))]
+        let control_lock = None;
         Ok(Self {
             device: api.open_path(info.path())?,
             info: descriptor,
             read_only: true,
             keyboard_brightness_only: false,
+            blade18_control: false,
+            _control_lock: control_lock,
         })
     }
 
@@ -125,6 +161,12 @@ impl Device {
             "Brightness access is restricted to Blade 18 (2025)"
         );
         self.keyboard_brightness_only = true;
+        Ok(())
+    }
+
+    pub(crate) fn enable_blade18_controls(&mut self) -> Result<()> {
+        anyhow::ensure!(self.info.model_number_prefix == "RZ09-0529" && self.info.pid == 0x02c7);
+        self.blade18_control = true;
         Ok(())
     }
 

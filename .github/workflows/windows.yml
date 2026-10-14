@@ -20,3 +20,6 @@ jobs:
           path: |
             target/release/rhelper.exe
             target/release/rhelper-diagnostics.exe
+            LICENSE
+            NOTICE
+            THIRD_PARTY_LICENSES.md

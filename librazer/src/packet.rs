@@ -28,6 +28,25 @@ enum CommandStatus {
 }
 
 impl Packet {
+    pub(crate) fn ensure_blade18_access(&self) -> Result<()> {
+        if self.ensure_brightness_access().is_ok() {
+            return Ok(());
+        }
+        let command = u16::from_be_bytes([self.command_class, self.command_id]);
+        let args = &self.args[..usize::from(self.data_size).min(80)];
+        let allowed = match command {
+            0x0300 => matches!(args, [1, 4, 0 | 1]),
+            0x0302 => matches!(args, [1, 4, 0 | 2]),
+            0x0712 => matches!(args, [0x50 | 0xd0]),
+            0x0d02 => matches!(args, [1, 1 | 2, 0 | 2 | 4 | 5 | 6 | 7, 0 | 1]),
+            0x0d07 => matches!(args, [1, 1, 0..=3] | [1, 2, 0..=2]),
+            // The API only offers the tested range; wider encoding is needed to restore a captured setpoint.
+            0x0d01 => matches!(args, [0, 1 | 2, 0..=55]),
+            _ => false,
+        };
+        ensure!(allowed, "Command {command:04x} is blocked for Blade 18 controls");
+        Ok(())
+    }
     pub(crate) fn ensure_brightness_access(&self) -> Result<()> {
         if self.command_class == 0x03
             && self.command_id == 0x03
@@ -126,6 +145,18 @@ impl TryFrom<&[u8]> for Packet {
 #[cfg(test)]
 mod diagnostic_tests {
     use super::Packet;
+    #[test]
+    fn blade18_access_blocks_undervolt_unknown_modes_and_unbounded_fans() {
+        for (cmd, args) in [
+            (0x0d07, vec![1, 1, 4]),
+            (0x0d02, vec![1, 1, 3, 0]),
+            (0x0d01, vec![0, 1, 56]),
+            (0x0004, vec![3, 0]),
+            (0x070f, vec![2]),
+        ] {
+            assert!(Packet::new(cmd, &args).ensure_blade18_access().is_err());
+        }
+    }
 
     #[test]
     fn brightness_access_does_not_enable_other_setters() {

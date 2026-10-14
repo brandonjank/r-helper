@@ -1,7 +1,10 @@
 #![windows_subsystem = "windows"]
 
 mod device;
-mod diagnostic_app;
+mod blade_app;
+mod blade_profiles;
+mod blade_power;
+mod blade_desktop;
 mod messaging;
 mod power;
 mod system;
@@ -1307,7 +1310,7 @@ fn set_windows_app_id() {}
 fn main() -> Result<(), eframe::Error> {
     set_windows_app_id();
     if librazer::diagnostics::is_target_system() {
-        return diagnostic_app::run();
+        return blade_app::run();
     }
     let initial_height = 500.0;
     let options = eframe::NativeOptions {

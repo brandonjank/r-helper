@@ -65,14 +65,62 @@ Off and the updated GUI launched successfully.
 The actual GUI slider and Apply button were tested: 176 → 168 with device readback,
 then restoration to 176 with matching readback. The application remains running.
 
-## Next validation steps
+## Extended batch on 2026-10-14
 
-1. Compare getter snapshots with Synapse's displayed values, including both fan zones.
-2. Keyboard brightness round trip and GUI test passed; next validate logo setters.
-3. Validate battery care behavior and persistence across sleep and restart.
-4. Record supported performance modes and CPU/GPU combinations for this Intel model.
-5. Validate fan control limits and rollback before exposing manual controls.
+The owner authorized testing all remaining controls as a batch. The CLI synchronizes
+a recovery snapshot before writes and restores after every case. All 23 command
+readback/restoration cases passed:
 
-Do not copy the AMD Blade 16's boost combinations or fan limits into the Blade 18
-descriptor without evidence. Keep the Blade 18 out of the upstream GUI control
-table until the relevant controls have been validated.
+| Category | Verified requests |
+| --- | --- |
+| Logo | Off, Static, Breathing |
+| Battery care | Enable, Disable |
+| Performance | Balanced, Silent, Performance, Custom |
+| CPU/GPU | CPU Low/Medium/High/Boost × GPU Low/Medium/High (12 combinations) |
+| Fan targets | 4000 and 4500 RPM, manual flag and both setpoint readbacks |
+
+The initial snapshot was brightness 176, static logo, battery care disabled,
+Balanced, automatic fans, CPU Medium/GPU Low, with stored fan setpoints 2000/2000.
+All those settings were restored after the batch. Actual RPM fluctuates naturally.
+
+### Physical fan response
+
+A 15-second follow-up showed a slow ramp, so testing was extended to 60 seconds
+at a 4000 target and 30 seconds at 4500. At 4000, zone 1 plateaued around 2900
+while zone 2 reached 3900. At 4500, final observed speeds were 4100/4300.
+Manual targets therefore remain explicitly experimental, bounded to 4000–4500,
+and separate from displayed actual speeds. This is not a verified physical
+minimum/maximum range or a thermal/load test. Only the two exposed fan zones are
+queried; independent control of a third fan has not been established.
+
+### GUI and desktop integration
+
+- Actual GUI battery-care enable and logo Off were verified by an independent
+  diagnostic process, survived app exit/relaunch, then were restored by the AC profile.
+- AC Balanced and battery Silent profiles were saved and reloaded across app restarts.
+- Ctrl+Shift+Alt+F5 changed mode; F6 applied the saved AC profile.
+- F7 applied the saved battery profile; F6 then restored the AC profile.
+- Hide-to-tray and Ctrl+Shift+Alt+F12 from Notepad reopened the app.
+- A hidden-window wake bug was found and fixed by dispatching native tray/hotkey events
+  directly rather than relying on hidden-window redraw polling.
+- The owner physically unplugged/reconnected AC. Battery Silent and AC Balanced
+  were verified by independent getters while the app remained hidden.
+- Power-profile application runs in a background watcher independently of rendering;
+  startup alone does not apply a profile. Unknown source values do not trigger switching.
+- A transient zero battery-care response and mixed-zone modes were observed around
+  power transitions. State reads now retry up to three times without inventing defaults.
+- One battery transition later showed brightness 180 after the profile had confirmed 176.
+  Razer Elevation Service, Game Manager Service 3 and Gaming Services Updater were running.
+  This is a coexistence observation; which component changed brightness is unproven.
+
+Snapshots are in the ignored `diagnostic-reports/` directory. Hyperboost, undervolting,
+other fan ranges, sleep/reboot persistence, actual 80% charging cutoff, and thermal
+stability under load remain unverified. The model-specific UI is intentionally separate
+from the legacy GUI, whose assumptions do not apply to this Intel Blade 18.
+
+Final validation: 14 automated tests passed, both optimized executables built locally,
+and the optimized GUI launched with the original hardware settings restored. The
+recovery command was also run against the captured original state and verified brightness
+176, Static logo, battery care disabled, Balanced/Auto, CPU Medium/GPU Low, and stored
+fan setpoints 2000/2000. Automatic profile switching is enabled with Balanced AC and
+Silent battery profiles. Static analysis completed with warnings in legacy code.

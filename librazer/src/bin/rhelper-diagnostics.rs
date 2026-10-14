@@ -18,10 +18,32 @@ struct Args {
     /// Temporarily adjust brightness by 8/255, read back, then restore the original.
     #[arg(long, requires = "output", conflicts_with_all = ["probe", "probe_interface"])]
     validate_brightness: bool,
+    /// Test Blade 18 lighting, battery care, normal modes/boosts and bounded fans, restoring each case.
+    #[arg(long, requires = "output", conflicts_with_all = ["probe", "probe_interface", "validate_brightness"])]
+    validate_batch: bool,
+    /// Observe actual fan ramps at 4000/4500 RPM for up to 90 seconds, then restore.
+    #[arg(long, requires = "output", conflicts_with_all = ["probe", "probe_interface", "validate_brightness", "validate_batch"])]
+    validate_fans: bool,
+    /// Restore a model-tagged recovery snapshot created alongside a batch/fan report.
+    #[arg(long, conflicts_with_all = ["output", "probe", "probe_interface", "validate_brightness", "validate_batch", "validate_fans"])]
+    restore_state: Option<PathBuf>,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    if let Some(path) = args.restore_state {
+        println!("{}", serde_json::to_string_pretty(&librazer::blade18::restore_record(&path)?)?);
+        return Ok(());
+    }
+    if args.validate_fans {
+        println!("{}", librazer::blade18::validate_fans(args.output.as_ref().unwrap())?);
+        return Ok(());
+    }
+    if args.validate_batch {
+        let report = librazer::blade18::validate_batch(args.output.as_ref().unwrap())?;
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
     // Validate the output destination before accessing hardware.
     let mut output = args
         .output

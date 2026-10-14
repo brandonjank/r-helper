@@ -6,24 +6,44 @@
 This fork is maintained at [brandonjank/r-helper](https://github.com/brandonjank/r-helper),
 based on [Fatalution/r-helper](https://github.com/Fatalution/r-helper).
 
-## Blade 18 (2025) development
+## Blade 18 (2025)
 
-The `RZ09-0529` / USB `1532:02c7` is recognized in a dedicated diagnostics screen.
-On this model, launching `rhelper.exe` opens diagnostics instead of the upstream control UI.
-Inventory is passive; **Read device status** explicitly sends audited getter requests.
-Setting commands are blocked on diagnostic device handles. A separate, narrowly scoped
-brightness handle permits only the keyboard brightness setter plus audited getters.
-No initialization commands are sent. Performance, fans, battery care, and logo setters
-remain pending validation.
+The `RZ09-0529` / USB `1532:02c7` opens a model-specific control screen with:
 
-Keyboard brightness passed a live 176 → 168 → 176 round trip with matching readbacks.
-Use **Read brightness**, adjust the slider, then **Apply brightness**. The app verifies
-the result and attempts to restore the previous value if the update fails.
+- Keyboard brightness, logo Off/Static/Breathing, and battery-care toggle.
+- Balanced, Silent, Performance, and Custom modes; CPU Low/Medium/High/Boost and GPU Low/Medium/High.
+- Automatic cooling and experimental manual fan targets limited to 4000–4500 RPM in Balanced mode.
+- Saved AC and battery profiles, including automatic switching while hidden in the tray.
+- Tray menu and global shortcuts: Ctrl+Shift+Alt+F12 shows the app, F5 cycles modes,
+  F6 applies the AC profile, and F7 applies the battery profile.
+
+**Save current as AC/battery** captures a fresh hardware snapshot. Battery profiles
+allow Balanced or Silent. Automatic switching requires both profiles and is off by
+default. Close hides to the tray; **Exit** quits. Global commands reopen the window
+to show their result. Profiles live in `%LOCALAPPDATA%\RHelper\blade18.json` and
+survive application restarts. Invalid configuration is preserved and reported.
+
+Setters are model-scoped and read back; failed changes attempt rollback. An exclusive
+device lock coordinates R-Helper operations. No initialization or undervolt commands
+are sent. Hyperboost and unverified fan ranges are excluded. Manual targets are not
+guaranteed physical RPM: fans ramp slowly and the two zones can report different speeds.
+
+Hardware batch testing verified 23 command/readback/restoration cases, plus longer fan
+response, GUI, hotkey, profile, application-restart, and real AC/battery transition checks.
+These checks do not establish thermal stability under load, sleep/reboot persistence,
+or that charging physically stops at 80%. Razer background services remained active;
+brightness drift was observed after one battery transition, so coexistence is not certified.
 
 To repeat the temporary validation with a recovery record written before the first change:
 
 ```powershell
 cargo run -p librazer --bin rhelper-diagnostics -- --validate-brightness --output brightness-test.json
+# Full temporary test batch with a recovery record and restoration after each case:
+cargo run -p librazer --bin rhelper-diagnostics -- --validate-batch --output batch-test.json
+# Longer physical fan-response observation, followed by restoration:
+cargo run -p librazer --bin rhelper-diagnostics -- --validate-fans --output fan-test.json
+# Emergency restoration uses the separate, immutable recovery snapshot:
+cargo run -p librazer --bin rhelper-diagnostics -- --restore-state batch-test.recovery.json
 ```
 
 The console utility exports JSON without serial numbers, usernames, or HID device paths:
@@ -45,7 +65,7 @@ A Windows application to control Razer Blade settings w/o Synapse.
 
 <img width="332" height="388" alt="image" src="https://github.com/user-attachments/assets/3a4630d8-d79a-4e6b-b6a6-df4f1f52bdb9" />
 
-## Features
+## Upstream features for other models
 
 - Performance modes: Battery, Silent, Balanced, Performance, Hyperboost, Custom
 - Custom mode: CPU/GPU Low/Medium/High/Boost adjustments with experimental Undervolt option (no idea what it does as it's a preset)
