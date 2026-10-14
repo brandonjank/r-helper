@@ -122,7 +122,7 @@ fn render_custom_boosts(
                 };
                 let mut btn = egui::Button::new(style_text);
                 btn = btn.fill(if selected { color } else { Color32::TRANSPARENT }).stroke(
-                    egui::Stroke::new(1.0, if selected { color } else { Color32::from_gray(90) }),
+                    egui::Stroke::new(1.0_f32, if selected { color } else { Color32::from_gray(90) }),
                 );
                 let response = ui.add_enabled(custom_active, btn);
                 if response.clicked() && !selected {
@@ -147,7 +147,7 @@ fn render_custom_boosts(
                         egui::Button::new(egui::RichText::new(&label).color(Color32::WHITE));
                     btn = btn
                         .fill(if selected { color } else { Color32::TRANSPARENT })
-                        .stroke(egui::Stroke::new(1.0, color));
+                        .stroke(egui::Stroke::new(1.0_f32, color));
                     let invalid_combo = !debug_mode
                         && disallowed_pairs.iter().any(|(c, g)| *c == boost && *g == current_gpu);
                     let is_extra = !base_cpu.contains(&boost);
@@ -157,7 +157,7 @@ fn render_custom_boosts(
                             egui::RichText::new(&label).italics().color(Color32::from_gray(170)),
                         )
                         .fill(Color32::TRANSPARENT)
-                        .stroke(egui::Stroke::new(1.0, Color32::from_gray(90)));
+                        .stroke(egui::Stroke::new(1.0_f32, Color32::from_gray(90)));
                     }
                     let response = ui.add_enabled(custom_active && !invalid_combo, btn);
                     if response.clicked() && !selected {
@@ -183,7 +183,7 @@ fn render_custom_boosts(
             let mut btn = egui::Button::new(egui::RichText::new(&label).color(Color32::WHITE));
             btn = btn
                 .fill(if selected { color } else { Color32::TRANSPARENT })
-                .stroke(egui::Stroke::new(1.0, color));
+                .stroke(egui::Stroke::new(1.0_f32, color));
             let invalid_combo = !debug_mode
                 && disallowed_pairs.iter().any(|(c, g)| *c == current_cpu && *g == boost);
             let is_extra = !base_gpu.contains(&boost);
@@ -192,7 +192,7 @@ fn render_custom_boosts(
                     egui::RichText::new(&label).italics().color(Color32::from_gray(170)),
                 )
                 .fill(Color32::TRANSPARENT)
-                .stroke(egui::Stroke::new(1.0, Color32::from_gray(90)));
+                .stroke(egui::Stroke::new(1.0_f32, Color32::from_gray(90)));
             }
             let response = ui.add_enabled(custom_active && !invalid_combo, btn);
             if response.clicked() && !selected {
@@ -226,9 +226,9 @@ fn render_performance_header(ui: &mut egui::Ui, ac_power: bool, show_probe_butto
                 let mut eye_btn = egui::Button::new(RichText::new("👁"));
                 if active {
                     let highlight = AC_SELECTED_COLOR; // reuse green
-                    eye_btn = eye_btn.fill(highlight).stroke(egui::Stroke::new(1.0, highlight));
+                    eye_btn = eye_btn.fill(highlight).stroke(egui::Stroke::new(1.0_f32, highlight));
                 } else {
-                    eye_btn = eye_btn.stroke(egui::Stroke::new(1.0, Color32::from_gray(90)));
+                    eye_btn = eye_btn.stroke(egui::Stroke::new(1.0_f32, Color32::from_gray(90)));
                 }
                 let resp = ui.add(eye_btn).on_hover_text("Show/Hide hidden modes & boosts");
                 if resp.clicked() {
@@ -290,7 +290,7 @@ fn render_performance_modes(
                     }));
                 btn = btn.fill(if selected { button_color } else { Color32::TRANSPARENT }).stroke(
                     egui::Stroke::new(
-                        1.0,
+                        1.0_f32,
                         if is_hidden && !selected { Color32::from_gray(90) } else { button_color },
                     ),
                 );
@@ -318,7 +318,7 @@ fn render_performance_modes(
                     }));
                 btn = btn.fill(if selected { button_color } else { Color32::TRANSPARENT }).stroke(
                     egui::Stroke::new(
-                        1.0,
+                        1.0_f32,
                         if is_hidden && !selected { Color32::from_gray(90) } else { button_color },
                     ),
                 );
@@ -348,7 +348,7 @@ fn render_performance_modes(
                         if selected { CUSTOM_ACTIVE_STROKE } else { Color32::from_gray(80) };
                     let btn = egui::Button::new(RichText::new(&custom_str).color(Color32::WHITE))
                         .fill(fill_color)
-                        .stroke(egui::Stroke::new(1.0, stroke_color));
+                        .stroke(egui::Stroke::new(1.0_f32, stroke_color));
                     let response = ui.add(btn);
                     if response.clicked() && !selected {
                         action = PerformanceAction::SetPerformanceMode(custom_str);

@@ -28,6 +28,23 @@ enum CommandStatus {
 }
 
 impl Packet {
+    /// Only audited getter packets may pass through a diagnostic device.
+    pub(crate) fn ensure_diagnostic_query(&self) -> Result<()> {
+        let command = u16::from_be_bytes([self.command_class, self.command_id]);
+        let args = &self.args[..usize::from(self.data_size).min(self.args.len())];
+        let allowed = match command {
+            0x0383 => args == [1, 5, 0],
+            0x0380 | 0x0382 => args == [1, 4, 0],
+            0x0084 => args == [0, 0],
+            0x0792 | 0x078f => args == [0],
+            0x0d82 => args == [0, 1, 0, 0] || args == [0, 2, 0, 0],
+            0x0d81 | 0x0d88 | 0x0d87 => args == [0, 1, 0] || args == [0, 2, 0],
+            _ => false,
+        };
+        ensure!(allowed, "Command {command:04x} is blocked in diagnostic mode");
+        Ok(())
+    }
+
     pub fn new(command: u16, args: &[u8]) -> Packet {
         let mut args_buffer = [0x00; 80];
         args_buffer[..args.len()].copy_from_slice(args);
@@ -93,5 +110,36 @@ impl TryFrom<&[u8]> for Packet {
         ensure!(data.len() == std::mem::size_of::<Packet>(), "Invalid raw data size");
 
         Ok(bincode::deserialize::<Packet>(data)?)
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::Packet;
+
+    #[test]
+    fn diagnostics_reject_setters_and_unreviewed_arguments() {
+        for (cmd, args) in [
+            (0x0303, vec![1, 5, 50]),
+            (0x0d02, vec![1, 1, 0, 0]),
+            (0x0712, vec![1]),
+            (0x0d01, vec![0, 1, 20]),
+            (0x0383, vec![1, 4, 0]),
+            (0xffff, vec![]),
+        ] {
+            assert!(Packet::new(cmd, &args).ensure_diagnostic_query().is_err());
+        }
+    }
+
+    #[test]
+    fn diagnostics_allow_reviewed_getters() {
+        for (cmd, args) in [
+            (0x0383, vec![1, 5, 0]),
+            (0x0792, vec![0]),
+            (0x0d82, vec![0, 2, 0, 0]),
+            (0x0d88, vec![0, 1, 0]),
+        ] {
+            assert!(Packet::new(cmd, &args).ensure_diagnostic_query().is_ok());
+        }
     }
 }

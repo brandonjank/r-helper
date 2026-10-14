@@ -18,6 +18,7 @@ rhelper.zip
 *.zip
 *.log
 dist/
+/diagnostic-reports/
 
 # Exclude CLI tool (local only)
 razer-cli/

@@ -4,4 +4,5 @@ pub mod feature;
 pub mod types;
 
 pub mod descriptor;
+pub mod diagnostics;
 mod packet;

@@ -7,6 +7,7 @@ use std::{thread, time};
 pub struct Device {
     device: hidapi::HidDevice,
     pub info: Descriptor,
+    read_only: bool,
 }
 
 // Read the model id and clip to conform with https://mysupport.razer.com/app/answers/detail/a_id/5481
@@ -39,13 +40,16 @@ impl Device {
             let path = info.path();
             let device = api.open_path(path)?;
             if device.send_feature_report(&[0, 0]).is_ok() {
-                return Ok(Device { device, info: descriptor.clone() });
+                return Ok(Device { device, info: descriptor.clone(), read_only: false });
             }
         }
         anyhow::bail!("Failed to open device {:?}", descriptor)
     }
 
     pub fn send(&self, report: Packet) -> Result<Packet> {
+        if self.read_only {
+            report.ensure_diagnostic_query()?;
+        }
         // extra byte for report id
         let mut response_buf: Vec<u8> = vec![0x00; 1 + std::mem::size_of::<Packet>()];
         //println!("Report {:?}", report);
@@ -88,6 +92,16 @@ impl Device {
         }
 
         Err(anyhow!("Failed to send feature report"))
+    }
+
+    /// Open a specific enumerated interface without the upstream test report.
+    pub(crate) fn open_diagnostic(
+        api: &hidapi::HidApi,
+        info: &hidapi::DeviceInfo,
+        descriptor: Descriptor,
+    ) -> Result<Self> {
+        anyhow::ensure!(info.vendor_id() == Self::RAZER_VID && info.product_id() == descriptor.pid);
+        Ok(Self { device: api.open_path(info.path())?, info: descriptor, read_only: true })
     }
 
     pub fn enumerate() -> Result<(Vec<u16>, String)> {
