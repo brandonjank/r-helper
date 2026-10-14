@@ -120,6 +120,8 @@ impl Packet {
             }
             0x0084 => args == [0, 0],
             0x0792 | 0x078f => args == [0],
+            0x078c => args == [0, 0],
+            0x0d8d => matches!(args, [0, 1..=3, 0]),
             // Selector 4 is included only as a getter after the device's ID list
             // explicitly advertised it. No fourth-selector setters are allowed.
             0x0d82 => matches!(args, [0, 1..=4, 0, 0]),
@@ -181,6 +183,9 @@ impl Packet {
             // this does not authorize queries to any extra fan selectors.
             || (report.remaining_packets == 0 && report.data_size == self.data_size
                 && match (self.command_class, self.command_id, self.data_size, self.remaining_packets) {
+                    // Observed adapter-level reply uses the returned-byte count
+                    // in this header. Accept only the documented wattage enums.
+                    (0x07, 0x8c, 2, 0x0200) => self.args[..2].iter().all(|v| matches!(*v, 0..=15 | 17..=19 | 255)),
                     (0x0d, 0x80, 80, 0x0500) => self.args[..5] == [4, 1, 2, 3, 4],
                     (0x0d, 0x83, 12, 0x0c00) => self.args[0] == 0,
                     (0x0d, 0x8f, 1, 0x0100) => self.args[0] == 1,
@@ -222,6 +227,49 @@ impl TryFrom<&[u8]> for Packet {
 #[cfg(test)]
 mod diagnostic_tests {
     use super::Packet;
+    #[test]
+    fn charger_discovery_only_accepts_the_exact_getter() {
+        assert!(Packet::new(0x078c, &[0, 0]).ensure_diagnostic_query().is_ok());
+        for args in [vec![], vec![0], vec![1, 0], vec![0, 1], vec![0, 0, 0]] {
+            assert!(Packet::new(0x078c, &args).ensure_diagnostic_query().is_err());
+        }
+        for command in [0x070c, 0x070f] {
+            assert!(Packet::new(command, &[0, 0]).ensure_diagnostic_query().is_err());
+            assert!(Packet::new(command, &[4]).ensure_blade18_access().is_err());
+        }
+    }
+    #[test]
+    fn duty_cycle_discovery_cannot_set_pwm_or_scan_new_selectors() {
+        for selector in 0..=255 {
+            assert_eq!(Packet::new(0x0d8d, &[0, selector, 0]).ensure_diagnostic_query().is_ok(), (1..=3).contains(&selector));
+            assert!(Packet::new(0x0d0d, &[0, selector, 50]).ensure_blade18_access().is_err());
+        }
+        for args in [vec![0, 1], vec![1, 1, 0], vec![0, 1, 1], vec![0, 1, 0, 0]] {
+            assert!(Packet::new(0x0d8d, &args).ensure_diagnostic_query().is_err());
+        }
+    }
+    #[test]
+    fn charger_response_header_exception_is_scoped_to_documented_levels() {
+        let request = Packet::new(0x078c, &[0, 0]);
+        let mut reply = Packet::new(0x078c, &[19, 19]);
+        reply.id = request.id;
+        reply.status = 2;
+        reply.remaining_packets = 0x0200;
+        assert!(reply.ensure_matches_report(&request).is_ok());
+        for value in 0..=255 {
+            reply.args[0] = value;
+            assert_eq!(reply.ensure_matches_report(&request).is_ok(), matches!(value, 0..=15 | 17..=19 | 255));
+        }
+        reply.args[0] = 19;
+        reply.remaining_packets = 0x0300;
+        assert!(reply.ensure_matches_report(&request).is_err());
+        reply.remaining_packets = 0x0200;
+        reply.data_size = 3;
+        assert!(reply.ensure_matches_report(&request).is_err());
+        reply.data_size = 2;
+        reply.command_id = 0x8e;
+        assert!(reply.ensure_matches_report(&request).is_err());
+    }
     #[test]
     fn static_keyboard_setter_cannot_write_other_regions_effects_or_frames() {
         let valid = [1, 5, 1, 0, 1, 1, 32, 64, 255];

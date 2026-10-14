@@ -116,6 +116,17 @@ pub fn collect_thermal_capabilities() -> Result<Value> {
         ("panel_resolution_mode", 0x0d8e, vec![0]),
         ("fan_cooling_mode_class_0", 0x0d90, vec![0, 0, 0]),
         ("startup_animation_control", 0x0f98, vec![0]),
+        // Model-711 runtime enables adapter-wattage detection. Its caller compares
+        // the two enum values; these bytes are not literal measured watts.
+        ("adapter_wattage_levels", 0x078c, vec![0, 0]),
+        // The vendor's charge-once task preserves the other bits in this getter.
+        // Read only: do not enable the shared 070f setter during discovery.
+        ("power_mode_flags", 0x078f, vec![0]),
+        // Shared vendor library has duty-cycle getters but no caller was found
+        // in the inspected model task bundle. Only known physical selectors.
+        ("fan_1_duty_cycle_candidate", 0x0d8d, vec![0, 1, 0]),
+        ("fan_2_duty_cycle_candidate", 0x0d8d, vec![0, 2, 0]),
+        ("fan_3_duty_cycle_candidate", 0x0d8d, vec![0, 3, 0]),
     ] {
         let result = command::send_command(&device, command_id, &args);
         getters.insert(

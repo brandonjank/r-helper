@@ -1,5 +1,9 @@
 # Blade 18 controller capability inventory
 
+See the [controller discovery pass](blade18-discovery.md) for newly verified
+charger telemetry, the charge-once bit path, unsupported PWM getters and the
+distinction between unused library methods and actual hidden hardware features.
+
 Target: RZ09-0529 / PID 1532:02c7. Research date: 2026-10-14. BIOS remains 2.01;
 the owner skipped the 4.01 update. A command in a shared protocol library or a
 Synapse feature flag is not proof that this SKU accepts its setter.
