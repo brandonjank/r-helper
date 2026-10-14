@@ -17,6 +17,9 @@ pub const FAN_MIN: u16 = 4000;
 pub const FAN_MAX: u16 = 4500;
 pub const MANUAL_FANS_VERIFIED: bool = true;
 
+mod curve_lab;
+pub use curve_lab::{test_curves, CurveFault};
+
 pub fn ac_connected() -> Result<bool> {
     #[cfg(windows)]
     {

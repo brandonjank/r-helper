@@ -134,6 +134,10 @@ behind the `diagnostic-gpu` feature. Normal R-Helper builds do not include its
 graphics dependency or execute its workload. The [post-update validation notes](docs/blade18-post-update.md)
 record measured sensor/fan behavior and the remaining curve-controller work.
 
+The [supervised curve test](tools/CurveTest.md) exercises three numbered fans and
+automatic recovery from injected missing/stale readings or controller termination.
+It uses explicit EC proxies and is separate from persistent GUI fan control.
+
 
 ## License
 

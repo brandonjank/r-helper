@@ -206,3 +206,40 @@ Verification after these changes: 34 workspace tests passed with the optional
 GPU feature enabled; the normal Windows app build succeeded. The default GUI
 dependency graph contains no wgpu dependency. CI includes the optional utility's
 unit tests, but does not execute GPU workloads on hosted runners.
+
+## Supervised curve controller validation
+
+The owner cannot reliably distinguish the vents by airflow at the tested delta.
+Instead of assigning unproven physical fan names, the next stage uses an explicit
+bounded lab policy: fan 1 from EC A, fan 2 from EC B, fan 3 from max(A,B). That
+last source is a proxy, not battery temperature. This advances execution/fallback
+testing without satisfying the earlier production physical/sensor mapping gates.
+
+The lab supports independent targets, unchanged-target suppression, downward
+damping, target/mode readback, age/temperature/power checks, immutable recovery
+and a separate process supervisor. See [curve test instructions](../tools/CurveTest.md).
+
+- `curves-missing-20261014.json`: initial targets 4300/4200/3300, later reduced
+  to 4200/4100/3200 as temperatures fell. Actual speeds reached 4100/4000/3200;
+  three-sample convergence passed. At 80.35 seconds, an injected missing B input
+  executed Auto and all three mode getters confirmed it. Captured targets and
+  settings restored without errors; supervisor recovery also passed.
+- `curves-stale-20261014.json`: actual-speed verification passed. At 36.83 seconds,
+  an injected four-second-old B reading executed Auto and all three mode getters
+  confirmed it. Captured-state and supervisor recovery passed.
+- `curves-terminated-20261014.json`: the controller was deliberately terminated
+  after 20 seconds. Its last saved sample was in Manual with targets
+  4100/4100/3100 and actual 4100/4000/3100. The separate supervisor recorded child
+  exit -1, restored captured settings using the immutable recovery file and
+  verified Auto/targets successfully. The controller report remains incomplete
+  by design; the `.guardian.json` records successful external recovery.
+
+These were bounded development runs with no concurrent stress workload. They do
+not qualify unattended cooling, CPU die accuracy, physical zone assignment,
+battery sensing, full fan envelopes, suspend/resume or hard OS failure. The normal
+GUI remains on firmware Auto; the lab is not enabled at login or in profiles.
+
+After this stage, all 36 workspace tests passed with the optional GPU diagnostic
+feature and the normal Windows debug build succeeded. Final on-demand readings
+confirmed all three selectors in Auto. Production app watchdog/editor integration
+and sleep/profile tests are the next fan-control milestone.
