@@ -15,7 +15,7 @@ pub enum FanZone {
     Zone2 = 0x02,
 }
 
-#[derive(EnumIter, Clone, Copy, Debug, PartialEq, ValueEnum)]
+#[derive(EnumIter, Clone, Copy, Debug, PartialEq, ValueEnum, Serialize, Deserialize)]
 pub enum PerfMode {
     Balanced = 0,
     Performance = 2,
@@ -31,7 +31,7 @@ pub enum MaxFanSpeedMode {
     Disable = 0,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum FanMode {
     Auto = 0,
     Manual = 1,

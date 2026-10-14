@@ -82,6 +82,12 @@ pub fn get_gpu_boost(device: &Device) -> Result<GpuBoost> {
 }
 
 pub fn set_fan_rpm(device: &Device, rpm: u16, check_mode: bool) -> Result<()> {
+    [FanZone::Zone1, FanZone::Zone2]
+        .into_iter()
+        .try_for_each(|zone| set_fan_zone_rpm(device, zone, rpm, check_mode))
+}
+
+pub fn set_fan_zone_rpm(device: &Device, zone: FanZone, rpm: u16, check_mode: bool) -> Result<()> {
     ensure!((0..=5500).contains(&rpm));
     if check_mode {
         ensure!(
@@ -90,9 +96,7 @@ pub fn set_fan_rpm(device: &Device, rpm: u16, check_mode: bool) -> Result<()> {
             FanMode::Manual
         );
     }
-    [FanZone::Zone1, FanZone::Zone2].into_iter().try_for_each(|zone| {
-        _send_command(device, 0x0d01, &[0, zone as u8, (rpm / 100) as u8]).map(|_| ())
-    })
+    _send_command(device, 0x0d01, &[0, zone as u8, (rpm / 100) as u8]).map(|_| ())
 }
 
 pub fn get_fan_rpm(device: &Device, fan_zone: FanZone) -> Result<u16> {

@@ -1,5 +1,10 @@
 #![windows_subsystem = "windows"]
 
+mod blade_app;
+mod blade_curves;
+mod blade_desktop;
+mod blade_power;
+mod blade_profiles;
 mod device;
 mod messaging;
 mod power;
@@ -1264,7 +1269,7 @@ impl eframe::App for RazerGuiApp {
     }
 }
 fn load_icon() -> IconData {
-    const ICON_DATA: &[u8] = include_bytes!("../rhelper.ico");
+    const ICON_DATA: &[u8] = include_bytes!("../assets/r-helper-icon.ico");
 
     if let Ok(image) = image::load_from_memory(ICON_DATA) {
         let image = image.resize_exact(32, 32, image::imageops::FilterType::Lanczos3).to_rgba8();
@@ -1304,7 +1309,14 @@ fn set_windows_app_id() {
 fn set_windows_app_id() {}
 
 fn main() -> Result<(), eframe::Error> {
+    if blade_curves::dispatch_cli() {return Ok(());}
     set_windows_app_id();
+    if std::env::args().any(|arg| arg == "--preview-blade18") {
+        return blade_app::run_preview();
+    }
+    if librazer::diagnostics::is_target_system() {
+        return blade_app::run();
+    }
     let initial_height = 500.0;
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
