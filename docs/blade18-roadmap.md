@@ -95,8 +95,10 @@ monotonic curve validation, linear interpolation and upward 100-RPM quantization
 It returns a shared automatic-mode plan for absent/stale/invalid readings, thermal
 cutoffs or unverified capabilities. It has no hardware access and is not connected
 to the GUI or a control worker. Its tests use synthetic envelopes, including for
-the third curve; they do not establish physical fan limits. Hysteresis, scheduling,
-cross-sensor policy, watchdog execution and real model limits remain future work.
+the third curve; they do not establish physical fan limits. Per-zone downward
+damping now holds decreases and steps them down by 100 RPM, with immediate
+increases and undelayed safety fallback plans. Scheduling, cross-sensor policy,
+watchdog execution and real model limits remain future work.
 
 See [post-update validation](blade18-post-update.md) before resuming live tests.
 

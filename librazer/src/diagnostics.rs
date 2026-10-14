@@ -122,6 +122,30 @@ pub fn collect_thermal_capabilities() -> Result<Value> {
             },
         );
     }
+    let advertised_four = getters.get("fan_id_list").is_some_and(|list| {
+        list["ok"] == true
+            && list["response_args"].as_array().is_some_and(|args| {
+                args[0].as_u64().is_some_and(|count| {
+                    count <= 79 && args.iter().skip(1).take(count as usize).any(|id| id == 4)
+                })
+            })
+    });
+    if advertised_four {
+        for (name, command_id, args) in [
+            ("advertised_selector_4_actual", 0x0d88, vec![0, 4, 0]),
+            ("advertised_selector_4_target", 0x0d81, vec![0, 4, 0]),
+            ("advertised_selector_4_mode", 0x0d82, vec![0, 4, 0, 0]),
+        ] {
+            let result = command::send_command(&device, command_id, &args);
+            getters.insert(
+                name.into(),
+                match result {
+                    Ok(response) => json!({"ok":true,"response_args":response.get_args()}),
+                    Err(error) => json!({"ok":false,"error":format!("{error:#}")}),
+                },
+            );
+        }
+    }
     report["thermal_capabilities"] = json!({"source":"https://apps.razer.com/synapse/products/711/mw/rzDevice25.279816c47f47f21a061c.js","getters":getters});
     Ok(report)
 }

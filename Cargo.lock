@@ -2346,6 +2346,7 @@ dependencies = [
  "serde_json",
  "strum",
  "strum_macros",
+ "wgpu",
  "windows 0.62.0",
  "winreg 0.52.0",
 ]

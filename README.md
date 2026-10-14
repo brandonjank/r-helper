@@ -129,6 +129,11 @@ hooks and exit-time hardware restoration. Normal launch uses the real device.
 
 Core device control via locally vendored `librazer` (derived from razer-ctl)
 
+Developer-only [GPU temperature testing](tools/GpuTest.md) is an opt-in binary
+behind the `diagnostic-gpu` feature. Normal R-Helper builds do not include its
+graphics dependency or execute its workload. The [post-update validation notes](docs/blade18-post-update.md)
+record measured sensor/fan behavior and the remaining curve-controller work.
+
 
 ## License
 

@@ -97,8 +97,10 @@ impl Packet {
             0x0381 => args == [1, 4, 0, 0, 0] || args == [1, 5, 0, 0, 0],
             0x0084 => args == [0, 0],
             0x0792 | 0x078f => args == [0],
-            0x0d82 => matches!(args, [0, 1..=3, 0, 0]),
-            0x0d81 | 0x0d88 => matches!(args, [0, 1..=3, 0]),
+            // Selector 4 is included only as a getter after the device's ID list
+            // explicitly advertised it. No fourth-selector setters are allowed.
+            0x0d82 => matches!(args, [0, 1..=4, 0, 0]),
+            0x0d81 | 0x0d88 => matches!(args, [0, 1..=4, 0]),
             0x0d87 => args == [0, 1, 0] || args == [0, 2, 0],
             _ => false,
         };
@@ -334,6 +336,8 @@ mod diagnostic_tests {
         for (cmd, args) in [
             (0x0d88, vec![0, 3, 0]),
             (0x0d81, vec![0, 3, 0]),
+            (0x0d88, vec![0, 4, 0]),
+            (0x0d82, vec![0, 4, 0, 0]),
             (0x0d85, vec![0, 1, 0, 0]),
             (0x0081, vec![0, 0]),
         ] {
@@ -342,7 +346,9 @@ mod diagnostic_tests {
         for (cmd, args) in [
             (0x0d01, vec![0, 3, 40]),
             (0x0d02, vec![1, 3, 0, 1]),
-            (0x0d88, vec![0, 4, 0]),
+            (0x0d88, vec![0, 5, 0]),
+            (0x0d01, vec![1, 4, 30]),
+            (0x0d02, vec![0, 4, 0, 1]),
             (0x0d85, vec![0, 4, 0, 0]),
         ] {
             assert!(Packet::new(cmd, &args).ensure_blade18_access().is_err());

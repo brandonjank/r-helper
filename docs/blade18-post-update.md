@@ -158,3 +158,51 @@ sample was within 1 C of the nearest NVIDIA reference (maximum timestamp gap
 associations, but is not independent CPU die-temperature validation or a GPU
 transient-response test. Fans were still cooling down from the mapping test;
 their speed trends cannot assign physical zones in this workload.
+
+## Bounded GPU response validation
+
+Added the optional `rhelper-gpu-test` development binary. It explicitly selects
+the RTX 5090 DX12 adapter, reads NVIDIA telemetry and submits bounded compute
+batches; it never changes cooling or tuning. Duration, AC, automatic modes,
+temperature availability and temperature cutoffs are checked. See
+[test utility instructions](../tools/GpuTest.md).
+
+The first 20-second run (`gpu-response-20261014.jsonl`) produced only 1-2% GPU
+utilization and negligible temperature movement. It does not validate response
+under load. A stronger 30-second run used 64 dispatches per batch:
+`gpu-response-batched-20261014.jsonl`.
+
+| Phase | Samples | EC GPU-associated B | NVIDIA GPU | Largest difference |
+| --- | --- | --- | --- | --- |
+| Baseline | 10 | 45-46 C | 46 C | 1 C |
+| GPU load | 26 | 45-51 C | 46-53 C | 2 C |
+| Recovery | 20 | 47-51 C | 47-49 C | 2 C |
+
+NVIDIA utilization peaked at 29%, power at 48.91 W. This is a moderate response
+test, not a maximum-power thermal qualification. NVIDIA query time was at most
+110 ms; EC and NVIDIA are sequential readings, so exact simultaneous accuracy
+or sensor latency is not established. EC A stayed at 65-67 C during GPU load.
+This strengthens B's GPU association; independent CPU die accuracy remains open.
+
+All samples reported Auto on all three selectors. Final readings were main fans
+2000/2000 RPM, selector 3 stopped, EC 66/47 C, original targets 4500/0/0. The
+automatic main-fan speeds stayed near baseline, so this test cannot assign their
+physical cooling roles.
+
+Fresh capability collection advertised selector 4, then sent only its three
+fixed getter shapes. `advertised-selector4-20261014.json` returned actual
+`[0,4,0]`, target `[0,4,30]`, mode `[0,4,0,0]`: zero actual RPM, a 3000-RPM
+stored target and Auto. Its purpose remains unknown; no selector 4 setters or
+fourth-fan UI are enabled. The earlier statement that it had not been queried
+describes the previous investigation stage.
+
+Offline curve planning now includes per-zone downward damping: increases apply
+immediately, while a continuously lower request permits only a 100-RPM reduction
+per configured 1-60 second hold. Missing/stale/invalid/critical readings and
+clock rollback bypass damping and return an automatic-mode plan. This calculates
+a plan only; an executed fallback and unattended controller are still unverified.
+
+Verification after these changes: 34 workspace tests passed with the optional
+GPU feature enabled; the normal Windows app build succeeded. The default GUI
+dependency graph contains no wgpu dependency. CI includes the optional utility's
+unit tests, but does not execute GPU workloads on hosted runners.

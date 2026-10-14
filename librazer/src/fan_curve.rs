@@ -116,6 +116,70 @@ pub fn plan(
     Plan::Targets(targets)
 }
 
+/// Offline target damping: increases apply immediately; each fan may decrease
+/// by only 100 RPM after a continuous lower request for the configured hold.
+/// Raw readings still pass all freshness/thermal checks before any damping.
+pub struct DampedPlanner {
+    downward_hold: Duration,
+    previous: Option<[u16; 3]>,
+    lower_since: [Option<Duration>; 3],
+    last_tick: Option<Duration>,
+}
+
+impl DampedPlanner {
+    pub fn new(downward_hold: Duration) -> Result<Self> {
+        ensure!(
+            (Duration::from_secs(1)..=Duration::from_secs(60)).contains(&downward_hold),
+            "Downward hold must be 1-60 seconds"
+        );
+        Ok(Self { downward_hold, previous: None, lower_since: [None; 3], last_tick: None })
+    }
+
+    pub fn update(
+        &mut self,
+        curves: [&Curve; 3],
+        readings: [Option<Reading>; 3],
+        max_age: Duration,
+        validation: Validation,
+        now: Duration,
+    ) -> Plan {
+        let result = plan(curves, readings, max_age, validation);
+        if self.last_tick.is_some_and(|previous| now < previous) {
+            self.reset();
+            return Plan::Automatic("Clock moved backward");
+        }
+        let Plan::Targets(raw) = result else {
+            self.reset();
+            return result;
+        };
+        self.last_tick = Some(now);
+        let mut targets = raw;
+        if let Some(previous) = self.previous {
+            for index in 0..3 {
+                if raw[index] < previous[index] {
+                    let since = *self.lower_since[index].get_or_insert(now);
+                    targets[index] = previous[index];
+                    if now.saturating_sub(since) >= self.downward_hold {
+                        targets[index] = raw[index].max(previous[index].saturating_sub(100));
+                        self.lower_since[index] =
+                            if targets[index] > raw[index] { Some(now) } else { None };
+                    }
+                } else {
+                    self.lower_since[index] = None;
+                }
+            }
+        }
+        self.previous = Some(targets);
+        Plan::Targets(targets)
+    }
+
+    fn reset(&mut self) {
+        self.previous = None;
+        self.lower_since = [None; 3];
+        self.last_tick = None;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -132,6 +196,79 @@ mod tests {
         Some(Reading { celsius, age: Duration::ZERO })
     }
     const VERIFIED: Validation = Validation { sensors_mapped: true, independent_actuators: true };
+
+    #[test]
+    fn damping_holds_only_decreases_and_preserves_independent_rises() {
+        let curve = curve();
+        let mut planner = DampedPlanner::new(Duration::from_secs(5)).unwrap();
+        let mut step = |seconds, temps: [f32; 3]| {
+            planner.update(
+                [&curve; 3],
+                temps.map(reading),
+                Duration::from_secs(3),
+                VERIFIED,
+                Duration::from_secs(seconds),
+            )
+        };
+        assert_eq!(step(0, [80.0, 40.0, 60.0]), Plan::Targets([4500, 4000, 4300]));
+        assert_eq!(step(1, [40.0, 80.0, 60.0]), Plan::Targets([4500, 4500, 4300]));
+        assert_eq!(step(5, [40.0, 80.0, 60.0]), Plan::Targets([4500, 4500, 4300]));
+        assert_eq!(step(6, [40.0, 80.0, 60.0]), Plan::Targets([4400, 4500, 4300]));
+        assert_eq!(step(11, [40.0, 80.0, 60.0]), Plan::Targets([4300, 4500, 4300]));
+    }
+
+    #[test]
+    fn damping_never_masks_bad_readings_or_thermal_cutoffs_and_resets() {
+        let curve = curve();
+        let mut planner = DampedPlanner::new(Duration::from_secs(5)).unwrap();
+        for (index, bad) in
+            [None, reading(90.0), Some(Reading { celsius: 60.0, age: Duration::from_secs(4) })]
+                .into_iter()
+                .enumerate()
+        {
+            let offset = index as u64 * 10;
+            assert_eq!(
+                planner.update(
+                    [&curve; 3],
+                    [reading(80.0); 3],
+                    Duration::from_secs(3),
+                    VERIFIED,
+                    Duration::from_secs(10 + offset)
+                ),
+                Plan::Targets([4500; 3])
+            );
+            assert!(matches!(
+                planner.update(
+                    [&curve; 3],
+                    [bad; 3],
+                    Duration::from_secs(3),
+                    VERIFIED,
+                    Duration::from_secs(11 + offset)
+                ),
+                Plan::Automatic(_)
+            ));
+            assert_eq!(
+                planner.update(
+                    [&curve; 3],
+                    [reading(40.0); 3],
+                    Duration::from_secs(3),
+                    VERIFIED,
+                    Duration::from_secs(12 + offset)
+                ),
+                Plan::Targets([4000; 3])
+            );
+        }
+        assert!(matches!(
+            planner.update(
+                [&curve; 3],
+                [reading(60.0); 3],
+                Duration::from_secs(3),
+                VERIFIED,
+                Duration::ZERO
+            ),
+            Plan::Automatic("Clock moved backward")
+        ));
+    }
 
     #[test]
     fn independent_inputs_interpolate_quantize_and_clamp() {
