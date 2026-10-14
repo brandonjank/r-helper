@@ -28,6 +28,26 @@ enum CommandStatus {
 }
 
 impl Packet {
+    /// Framing used by source-backed HID implementations; diagnostic opt-in only.
+    pub(crate) fn standard_framing(mut self) -> Self {
+        self.id = 0x1f;
+        let bytes = bincode::serialize(&self).unwrap();
+        self.crc = bytes[2..88].iter().fold(0, |crc, byte| crc ^ byte);
+        self
+    }
+    pub(crate) fn ensure_fan_lab_access(&self) -> Result<()> {
+        let command = u16::from_be_bytes([self.command_class, self.command_id]);
+        let args = &self.args[..usize::from(self.data_size).min(80)];
+        if command == 0x0d01 && matches!(args, [0 | 1, 1 | 2, 0..=55] | [0 | 1, 3, 0..=35]) {
+            return Ok(());
+        }
+        // Source-backed alternative from kgswx/R-helper RazerEC.SetPowerRaw.
+        // Limit this experiment to Balanced mode on existing primary selectors.
+        if command == 0x0d02 && matches!(args, [0, 1 | 2, 0, 0 | 1]) {
+            return Ok(());
+        }
+        self.ensure_blade18_access()
+    }
     pub(crate) fn ensure_blade18_access(&self) -> Result<()> {
         if self.ensure_brightness_access().is_ok() {
             return Ok(());
@@ -38,10 +58,12 @@ impl Packet {
             0x0300 => matches!(args, [1, 4, 0 | 1]),
             0x0302 => matches!(args, [1, 4, 0 | 2]),
             0x0712 => matches!(args, [0x50 | 0xd0]),
-            0x0d02 => matches!(args, [1, 1 | 2, 0 | 2 | 4 | 5 | 6 | 7, 0 | 1]),
+            0x0d02 => {
+                matches!(args, [1, 1 | 2, 0 | 2 | 4 | 5 | 6 | 7, 0 | 1] | [0, 1 | 2, 0, 0 | 1])
+            }
             0x0d07 => matches!(args, [1, 1, 0..=3] | [1, 2, 0..=2]),
             // The API only offers the tested range; wider encoding is needed to restore a captured setpoint.
-            0x0d01 => matches!(args, [0, 1 | 2, 0..=55]),
+            0x0d01 => matches!(args, [0 | 1, 1 | 2, 0..=55]),
             _ => false,
         };
         ensure!(allowed, "Command {command:04x} is blocked for Blade 18 controls");
@@ -64,13 +86,18 @@ impl Packet {
         let allowed = match command {
             0x0081 => args == [0, 0],
             0x0d85 => args == [0, 1, 0, 0],
+            // Vendor model-711 middleware: fixed-shape capability getters only.
+            0x0d80 => args == [0; 80],
+            0x0d83 => args == [0; 12],
+            0x0d8a | 0x0d8b => args == [0, 0],
+            0x0d8f => args == [0],
             0x0383 => args == [1, 5, 0],
             0x0380 => args == [1, 4, 0],
             0x0382 => args == [1, 4, 0] || args == [1, 5, 0],
             0x0381 => args == [1, 4, 0, 0, 0] || args == [1, 5, 0, 0, 0],
             0x0084 => args == [0, 0],
             0x0792 | 0x078f => args == [0],
-            0x0d82 => args == [0, 1, 0, 0] || args == [0, 2, 0, 0],
+            0x0d82 => matches!(args, [0, 1..=3, 0, 0]),
             0x0d81 | 0x0d88 => matches!(args, [0, 1..=3, 0]),
             0x0d87 => args == [0, 1, 0] || args == [0, 2, 0],
             _ => false,
@@ -123,7 +150,17 @@ impl Packet {
                 && report.remaining_packets == 0
                 && self.remaining_packets == 0x0300
                 && self.data_size == 4
-                && self.args[0] == 2),
+                && self.args[0] == 2)
+            // Additional fixed getter variants observed on this Blade 18.
+            // Keep command, request/response length and header value scoped;
+            // this does not authorize queries to any extra fan selectors.
+            || (report.remaining_packets == 0 && report.data_size == self.data_size
+                && match (self.command_class, self.command_id, self.data_size, self.remaining_packets) {
+                    (0x0d, 0x80, 80, 0x0500) => self.args[..5] == [4, 1, 2, 3, 4],
+                    (0x0d, 0x83, 12, 0x0c00) => self.args[0] == 0,
+                    (0x0d, 0x8f, 1, 0x0100) => self.args[0] == 1,
+                    _ => false,
+                }),
             "Response packet count {} differs from request {}; status {:02x}, data length {}, first arguments {:?}",
             self.remaining_packets, report.remaining_packets, self.status, self.data_size, &self.args[..8]
         );
@@ -159,6 +196,62 @@ impl TryFrom<&[u8]> for Packet {
 #[cfg(test)]
 mod diagnostic_tests {
     use super::Packet;
+    #[test]
+    fn standard_framing_encodes_known_checksums_without_changing_commands() {
+        for (command, args, expected) in
+            [(0x0d85, vec![0, 1, 0, 0], 0x8d), (0x0d01, vec![1, 1, 45], 0x22)]
+        {
+            let packet = Packet::new(command, &args).standard_framing();
+            let bytes = Vec::<u8>::from(&packet);
+            assert_eq!(bytes.len(), 90);
+            assert_eq!(bytes[1], 0x1f);
+            assert_eq!(bytes[88], expected);
+            assert_eq!(&bytes[8..8 + args.len()], args.as_slice());
+            assert_eq!(bytes[2..89].iter().fold(0, |crc, byte| crc ^ byte), 0);
+        }
+    }
+    #[test]
+    fn fan_lab_limits_and_normal_access_remain_separate() {
+        for zone in 0..=4 {
+            for mode in 0..=7 {
+                for manual in 0..=2 {
+                    let packet = Packet::new(0x0d02, &[0, zone, mode, manual]);
+                    assert_eq!(
+                        packet.ensure_fan_lab_access().is_ok(),
+                        matches!(zone, 1 | 2) && mode == 0 && manual <= 1
+                    );
+                    assert_eq!(
+                        packet.ensure_blade18_access().is_ok(),
+                        matches!(zone, 1 | 2) && mode == 0 && manual <= 1
+                    );
+                }
+            }
+        }
+        // Exhaust the one-byte enable/selector/RPM domain, including malformed lengths.
+        for enable in 0..=2 {
+            for zone in 0..=4 {
+                for rpm in 0..=255 {
+                    let packet = Packet::new(0x0d01, &[enable, zone, rpm]);
+                    let allowed = enable <= 1
+                        && match zone {
+                            1 | 2 => rpm <= 55,
+                            3 => rpm <= 35,
+                            _ => false,
+                        };
+                    assert_eq!(packet.ensure_fan_lab_access().is_ok(), allowed);
+                    assert_eq!(
+                        packet.ensure_blade18_access().is_ok(),
+                        enable <= 1 && matches!(zone, 1 | 2) && rpm <= 55
+                    );
+                    assert!(packet.ensure_diagnostic_query().is_err());
+                }
+            }
+        }
+        for args in [vec![], vec![1, 3], vec![1, 3, 35, 0]] {
+            assert!(Packet::new(0x0d01, &args).ensure_fan_lab_access().is_err());
+        }
+        assert!(Packet::new(0x0d07, &[1, 1, 4]).ensure_fan_lab_access().is_err());
+    }
     #[test]
     fn blade18_access_blocks_undervolt_unknown_modes_and_unbounded_fans() {
         for (cmd, args) in [
@@ -209,6 +302,16 @@ mod diagnostic_tests {
             (0x0d88, vec![0, 1, 0]),
         ] {
             assert!(Packet::new(cmd, &args).ensure_diagnostic_query().is_ok());
+        }
+    }
+    #[test]
+    fn thermal_capability_queries_cannot_become_setters_or_selector_scans() {
+        for (command, size) in [(0x0d80, 80), (0x0d83, 12), (0x0d8a, 2), (0x0d8b, 2), (0x0d8f, 1)] {
+            assert!(Packet::new(command, &vec![0; size]).ensure_diagnostic_query().is_ok());
+            assert!(Packet::new(command & 0xff7f, &vec![0; size]).ensure_blade18_access().is_err());
+            let mut unknown = vec![0; size];
+            unknown[0] = 1;
+            assert!(Packet::new(command, &unknown).ensure_diagnostic_query().is_err());
         }
     }
 
@@ -262,5 +365,27 @@ mod diagnostic_tests {
         response.args[0] = 2;
         response.command_id = 0x88;
         assert!(response.ensure_matches_report(&report).is_err());
+    }
+
+    #[test]
+    fn capability_header_variants_are_scoped_to_observed_shapes() {
+        for (command, size, header, prefix) in [
+            (0x0d80, 80, 0x0500, vec![4, 1, 2, 3, 4]),
+            (0x0d83, 12, 0x0c00, vec![0]),
+            (0x0d8f, 1, 0x0100, vec![1]),
+        ] {
+            let request = Packet::new(command, &vec![0; size]);
+            let mut response = Packet::new(command, &vec![0; size]);
+            response.args[..prefix.len()].copy_from_slice(&prefix);
+            response.id = request.id;
+            response.status = 2;
+            response.remaining_packets = header;
+            assert!(response.ensure_matches_report(&request).is_ok());
+            response.remaining_packets += 0x100;
+            assert!(response.ensure_matches_report(&request).is_err());
+            response.remaining_packets = header;
+            response.data_size -= 1;
+            assert!(response.ensure_matches_report(&request).is_err());
+        }
     }
 }

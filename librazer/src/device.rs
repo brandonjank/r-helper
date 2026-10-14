@@ -10,6 +10,8 @@ pub struct Device {
     read_only: bool,
     keyboard_brightness_only: bool,
     blade18_control: bool,
+    fan_lab: bool,
+    standard_framing: bool,
     _control_lock: Option<std::fs::File>,
 }
 
@@ -49,6 +51,8 @@ impl Device {
                     read_only: false,
                     keyboard_brightness_only: false,
                     blade18_control: false,
+                    fan_lab: false,
+                    standard_framing: false,
                     _control_lock: None,
                 });
             }
@@ -57,8 +61,11 @@ impl Device {
     }
 
     pub fn send(&self, report: Packet) -> Result<Packet> {
+        let report = if self.standard_framing { report.standard_framing() } else { report };
         if self.read_only {
-            if self.blade18_control {
+            if self.fan_lab {
+                report.ensure_fan_lab_access()?;
+            } else if self.blade18_control {
                 report.ensure_blade18_access()?;
             } else if self.keyboard_brightness_only {
                 report.ensure_brightness_access()?;
@@ -155,6 +162,8 @@ impl Device {
             read_only: true,
             keyboard_brightness_only: false,
             blade18_control: false,
+            fan_lab: false,
+            standard_framing: false,
             _control_lock: control_lock,
         })
     }
@@ -171,6 +180,18 @@ impl Device {
     pub(crate) fn enable_blade18_controls(&mut self) -> Result<()> {
         anyhow::ensure!(self.info.model_number_prefix == "RZ09-0529" && self.info.pid == 0x02c7);
         self.blade18_control = true;
+        Ok(())
+    }
+
+    pub(crate) fn enable_fan_lab(&mut self) -> Result<()> {
+        self.enable_blade18_controls()?;
+        self.fan_lab = true;
+        Ok(())
+    }
+
+    pub(crate) fn use_standard_framing(&mut self) -> Result<()> {
+        anyhow::ensure!(self.fan_lab, "Alternate framing requires diagnostic fan lab access");
+        self.standard_framing = true;
         Ok(())
     }
 

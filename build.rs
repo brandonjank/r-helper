@@ -1,6 +1,6 @@
 fn main() {
     println!("cargo:rerun-if-changed=razer-gui.rc");
-    println!("cargo:rerun-if-changed=rhelper.ico");
+    println!("cargo:rerun-if-changed=assets/r-helper-icon.ico");
 
     if cfg!(target_os = "windows") {
         // embed-resource 3.x: mark manifest as optional and unwrap the result so failures show clearly

@@ -8,13 +8,13 @@ This is a capability roadmap, not a promise that another laptop's controls work 
 
 | Area | Evidence | Remaining work |
 | --- | --- | --- |
-| Main fans | Unequal targets 4000/4500 and 4500/4000 accepted and read back; actual speeds responded separately. Original settings restored. | Physically map HID zones 1/2, correlate temperatures and validate under load. |
-| Third fan | Selector 3 responds to the existing fan getters. Stored target 3000 RPM; actual samples changed from 0 to 1300 and 1800 RPM. | Verify that selector 3 is the physical battery fan, determine control/mode behavior and bounds. No zone-3 writes enabled. |
-| Controller firmware | Getter `0081`, arguments `00 00`, returned bytes `01 06`. | Keep controller firmware separate from system BIOS version. |
+| Main fans | Post-update 90-second cases verified actual speeds independently at 4000/4500 and 4500/4000 RPM after delayed target reassertion. | Repeat physical mapping and validate temperature response before enabling curves. |
+| Third fan | With corrected initialization, targets 4000/4000/3500 produced actual speeds 4000/3900/3400 RPM. | Physical location and sensor policy remain unverified. Writes stay confined to the diagnostic lab. |
+| Controller firmware | Getter `0081`, arguments `00 00`, now returns bytes `01 07` after updates. | Keep controller firmware separate from system BIOS version. |
 | Controller temperature | Getter `0d85`, arguments `00 01 00 00`, returned `[2, 69, 45, 0]` after a narrowly checked parser correction for this model's header variant. | Candidate EC sensors A/B; validate units, mapping, update rate and load response. Do not assume either is a die sensor. |
 | RGB | Standard RGB getters for LED IDs 4/5 and the backlight effect getter return NotSupported on the verified endpoint. Existing brightness and logo mode getters work. | Capture keyboard, logo and underside lighting separately in Synapse. |
 | Device interfaces | Present-device inventory and HID enumeration show `1532:02c7`, interfaces 0–3; Razer virtual/control device nodes also exist. No present `1534` devices found. | Capture which interface/driver path handles each feature. A vendor ID alone does not establish compatibility. |
-| Other temperature providers | WMI exposes a BatteryTemperature class but returned no instances. ACPI thermal-zone query returned access denied in the current account. No Razer-named WMI class appeared in root/wmi. | Obtain validated CPU, GPU, battery and board readings from appropriate providers; ACPI zones are not automatically die temperatures. |
+| Other temperature providers | WMI exposes a BatteryTemperature class but returned no instances. ACPI thermal-zone query returned access denied in the current account. No Razer-named WMI class appeared in root/wmi. The Windows battery-class temperature query also reports unsupported. | Obtain validated CPU, GPU, battery and board readings from appropriate providers; ACPI zones are not automatically die temperatures. |
 
 Local raw evidence is in the ignored `diagnostic-reports/research/` directory.
 `independent-fan-zones.json` includes a recovery companion and restoration result.
@@ -89,6 +89,16 @@ HID selector numbers still require verification.
 The current public manual-target envelope remains experimental: 4000–4500 RPM in
 100 RPM increments. This is a tested command envelope, not physical fan limits.
 The main GUI still uses one shared slider; the diagnostic API can test unequal targets.
+
+The offline `librazer::fan_curve` planner now supports three independent inputs,
+monotonic curve validation, linear interpolation and upward 100-RPM quantization.
+It returns a shared automatic-mode plan for absent/stale/invalid readings, thermal
+cutoffs or unverified capabilities. It has no hardware access and is not connected
+to the GUI or a control worker. Its tests use synthetic envelopes, including for
+the third curve; they do not establish physical fan limits. Hysteresis, scheduling,
+cross-sensor policy, watchdog execution and real model limits remain future work.
+
+See [post-update validation](blade18-post-update.md) before resuming live tests.
 
 A one-time NVIDIA query taken immediately after the EC sample also reported 45 C,
 matching EC sensor B. This supports a GPU association at that instant but does not

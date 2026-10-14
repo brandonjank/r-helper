@@ -154,16 +154,19 @@ fn apply(device: &Device, change: &Change) -> Result<()> {
                 Change::ManualFanZones(targets) => targets,
                 _ => unreachable!(),
             };
-            ensure!(
-                c::get_perf_mode(device)?.0 == PerfMode::Balanced,
-                "Manual fans require Balanced mode"
-            );
-            for (zone, rpm) in [FanZone::Zone1, FanZone::Zone2].into_iter().zip(targets) {
-                c::set_fan_zone_rpm(device, zone, rpm, false)?;
+            let (performance, fan_mode) = c::get_perf_mode(device)?;
+            ensure!(ac_connected()?, "Manual fan targets currently require AC power");
+            ensure!(performance == PerfMode::Balanced, "Manual fans require Balanced mode");
+            for (command, args) in manual_fan_commands(targets, fan_mode == FanMode::Auto) {
+                c::send_command(device, command, &args)?;
             }
-            c::set_fan_mode(device, FanMode::Manual)?;
-            for (zone, rpm) in [FanZone::Zone1, FanZone::Zone2].into_iter().zip(targets) {
-                c::set_fan_zone_rpm(device, zone, rpm, true)?;
+            if fan_mode == FanMode::Auto {
+                // The mode transition can acknowledge before the effective RPM
+                // settles to its manual default. Reassert both targets afterward.
+                thread::sleep(Duration::from_secs(1));
+                for (command, args) in manual_fan_commands(targets, false) {
+                    c::send_command(device, command, &args)?;
+                }
             }
         }
         Change::AutoFans => c::set_fan_mode(device, FanMode::Auto)?,
@@ -182,6 +185,20 @@ fn apply(device: &Device, change: &Change) -> Result<()> {
     };
     ensure!(matches, "Readback mismatch after {change:?}: {state:?}");
     Ok(())
+}
+
+fn manual_fan_commands(targets: [u16; 2], enter_manual: bool) -> Vec<(u16, Vec<u8>)> {
+    let mut commands = Vec::new();
+    // Preserve the source-backed read/mode/target sequence per selector. A mode
+    // write after a selector's target resets that actuator toward 3000 RPM.
+    for (zone, rpm) in (1..=2).zip(targets) {
+        commands.push((0x0d82, vec![0, zone, 0, 0]));
+        if enter_manual {
+            commands.push((0x0d02, vec![0, zone, 0, 1]));
+        }
+        commands.push((0x0d01, vec![1, zone, (rpm / 100) as u8]));
+    }
+    commands
 }
 
 fn restore(device: &Device, original: &State) -> Result<State> {
@@ -206,10 +223,20 @@ fn restore(device: &Device, original: &State) -> Result<State> {
         }
     }
     attempt!(c::set_perf_mode(device, original.performance));
-    for (zone, rpm) in [1u8, 2].into_iter().zip(original.fan_setpoints) {
-        attempt!(c::send_command(device, 0x0d01, &[0, zone, (rpm / 100) as u8]));
+    if original.performance == PerfMode::Balanced && original.fan_mode == FanMode::Manual {
+        for (command, args) in manual_fan_commands(original.fan_setpoints, true) {
+            attempt!(c::send_command(device, command, &args));
+        }
+        thread::sleep(Duration::from_secs(1));
+        for (command, args) in manual_fan_commands(original.fan_setpoints, false) {
+            attempt!(c::send_command(device, command, &args));
+        }
+    } else {
+        for (zone, rpm) in [1u8, 2].into_iter().zip(original.fan_setpoints) {
+            attempt!(c::send_command(device, 0x0d01, &[0, zone, (rpm / 100) as u8]));
+        }
+        attempt!(c::set_fan_mode(device, original.fan_mode));
     }
-    attempt!(c::set_fan_mode(device, original.fan_mode));
     thread::sleep(Duration::from_millis(250));
     let state = read(device)?;
     ensure!(errors.is_empty(), "Restoration errors: {errors:?}; current state: {state:?}");
@@ -221,8 +248,7 @@ fn restore(device: &Device, original: &State) -> Result<State> {
             && state.fan_mode == original.fan_mode
             && (original.cpu.is_none() || state.cpu == original.cpu)
             && (original.gpu.is_none() || state.gpu == original.gpu)
-            && (original.fan_mode == FanMode::Auto
-                || state.fan_setpoints == original.fan_setpoints),
+            && state.fan_setpoints == original.fan_setpoints,
         "Restoration readback mismatch: {state:?}"
     );
     Ok(state)
@@ -254,7 +280,32 @@ pub fn restore_record(path: &Path) -> Result<State> {
         original.fan_setpoints.iter().all(|rpm| *rpm <= 5500 && rpm % 100 == 0),
         "Invalid fan setpoints in recovery record"
     );
-    restore(&open()?, &original)
+    let mut device = open()?;
+    if !record["thermal_original"].is_null() {
+        let thermal: crate::thermal::Sample =
+            serde_json::from_value(record["thermal_original"].clone())?;
+        ensure!(
+            thermal.modes.iter().all(|mode| mode[1] == 0)
+                && thermal.target_rpm[2] <= 3500
+                && thermal.target_rpm[2] % 100 == 0,
+            "Unvalidated thermal recovery snapshot"
+        );
+        device.enable_fan_lab()?;
+        if record["standard_framing"] == true {
+            device.use_standard_framing()?;
+        }
+        let third = c::send_command(&device, 0x0d01, &[1, 3, (thermal.target_rpm[2] / 100) as u8]);
+        let restored = restore(&device, &original);
+        third?;
+        let after = crate::thermal::read(&device)?;
+        ensure!(
+            after.target_rpm[2] == thermal.target_rpm[2]
+                && after.modes.iter().all(|mode| mode[1] == 0),
+            "Thermal recovery readback mismatch"
+        );
+        return restored;
+    }
+    restore(&device, &original)
 }
 
 pub fn change(change: Change) -> Result<State> {
@@ -337,28 +388,241 @@ pub fn apply_profile(profile: &Profile) -> Result<State> {
 }
 
 pub fn validate_fans(path: &Path) -> Result<Value> {
-    validate_fan_targets(path, &[([4000, 4000], 12), ([4500, 4500], 6)])
+    validate_fan_targets(path, &[([4000, 4000], 18), ([4500, 4500], 12)], false)
 }
 
 /// Test unequal zone targets in both directions, without assuming CPU/GPU mapping.
 pub fn validate_fan_zones(path: &Path) -> Result<Value> {
-    validate_fan_targets(path, &[([4000, 4500], 6), ([4500, 4000], 6)])
+    validate_fan_targets(path, &[([4000, 4500], 18), ([4500, 4000], 18)], true)
 }
 
-fn validate_fan_targets(path: &Path, cases: &[([u16; 2], usize)]) -> Result<Value> {
+/// Briefly change one target for owner-assisted mapping. Manual mode is shared
+/// by firmware; unchanged target registers remain captured and are restored.
+#[derive(Clone, Copy, Debug)]
+pub struct FanLabOptions {
+    pub zone: u8,
+    pub enabled_write: bool,
+    pub alternate_mode_byte: bool,
+    pub standard_framing: bool,
+    pub latch_after_target: bool,
+    pub paired_initialization: bool,
+    pub isolated_comparison: bool,
+    pub observe_seconds: u16,
+}
+pub fn identify_main_fan(path: &Path, options: FanLabOptions) -> Result<Value> {
+    let FanLabOptions {
+        zone,
+        enabled_write,
+        alternate_mode_byte,
+        standard_framing,
+        latch_after_target,
+        paired_initialization,
+        isolated_comparison,
+        observe_seconds,
+    } = options;
+    ensure!((20..=120).contains(&observe_seconds), "Observation must be 20 to 120 seconds");
+    ensure!(matches!(zone, 1..=3), "Expected fan selector 1/2/3");
+    ensure!(!isolated_comparison || (paired_initialization && enabled_write && alternate_mode_byte && !standard_framing && !latch_after_target), "Isolated mapping requires the validated paired/prefix sequence without framing or latching experiments");
+    ensure!(zone != 3 || enabled_write, "Third-fan test requires the explicit enable-byte variant");
+    let mut file = File::options().write(true).create_new(true).open(path)?;
+    let mut device = open()?;
+    device.enable_fan_lab()?;
+    if standard_framing {
+        device.use_standard_framing()?;
+    }
+    let original = read(&device)?;
+    ensure!(
+        original.fan_mode == FanMode::Auto,
+        "Return to automatic cooling before identification"
+    );
+    ensure!(ac_connected()?, "Identification requires AC power");
+    let thermal_original = crate::thermal::read(&device)?;
+    ensure!(
+        thermal_original.modes.iter().all(|mode| mode[1] == 0),
+        "All three selectors must report automatic cooling before identification"
+    );
+    ensure!(
+        thermal_original.target_rpm[2] <= 3500 && thermal_original.target_rpm[2] % 100 == 0,
+        "Third-fan original target cannot be restored with the bounded lab access"
+    );
+    let mut recovery =
+        File::options().write(true).create_new(true).open(path.with_extension("recovery.json"))?;
+    journal(
+        &mut recovery,
+        &json!({"model": "RZ09-0529", "original": original, "thermal_original": thermal_original, "standard_framing":standard_framing}),
+    )?;
+    let target = if zone == 3 { 3500 } else { 4500 };
+    let write_enable = u8::from(enabled_write);
+    let mode_byte = if alternate_mode_byte { 0 } else { 1 };
+    let mut report = json!({"original": original, "thermal_original": thermal_original, "zone": zone, "target": target, "write_enable": write_enable, "mode_byte":mode_byte, "standard_framing":standard_framing, "latch_after_target":latch_after_target, "paired_initialization":paired_initialization, "isolated_comparison":isolated_comparison, "observe_seconds":observe_seconds, "warmup_samples":[], "samples": [], "complete": false});
+    journal(&mut file, &report)?;
+    let result = (|| -> Result<()> {
+        c::set_perf_mode(&device, PerfMode::Balanced)?;
+        let baseline = if isolated_comparison { 30 } else { 40 };
+        if paired_initialization {
+            for selector in 1..=2 {
+                c::send_command(&device, 0x0d82, &[0, selector, 0, 0])?;
+                c::send_command(&device, 0x0d02, &[mode_byte, selector, 0, 1])?;
+                c::send_command(&device, 0x0d01, &[write_enable, selector, baseline])?;
+            }
+            thread::sleep(Duration::from_secs(1));
+            for selector in 1..=2 {
+                c::send_command(&device, 0x0d82, &[0, selector, 0, 0])?;
+                c::send_command(&device, 0x0d01, &[write_enable, selector, baseline])?;
+            }
+        }
+        if !paired_initialization {
+            c::send_command(&device, 0x0d02, &[mode_byte, 1, 0, 1])?;
+        }
+        if isolated_comparison {
+            c::send_command(&device, 0x0d01, &[write_enable, 3, baseline])?;
+            eprintln!("WARMUP: all three targets 3000 RPM; selected-zone change follows only after convergence.");
+            let mut settled = 0;
+            for _ in 0..30 {
+                thread::sleep(Duration::from_secs(2));
+                let sample = crate::thermal::read(&device)?;
+                ensure!(
+                    ac_connected()?
+                        && sample.ec_celsius[0] > 0
+                        && sample.ec_celsius[0] < 90
+                        && sample.ec_celsius[1] < 80,
+                    "Warmup power/temperature guard reached"
+                );
+                ensure!(
+                    sample.modes.iter().all(|mode| mode[1] == 1),
+                    "Manual mode changed during warmup"
+                );
+                if sample.actual_rpm.iter().all(|rpm| rpm.abs_diff(3000) <= 200) {
+                    settled += 1;
+                } else {
+                    settled = 0;
+                }
+                report["warmup_samples"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(serde_json::to_value(sample)?);
+                journal(&mut file, &report)?;
+            }
+            ensure!(settled >= 3, "Baseline did not settle; skipping physical comparison");
+        }
+        c::send_command(&device, 0x0d01, &[write_enable, zone, (target / 100) as u8])?;
+        eprintln!("OBSERVE NOW: only zone {zone} target changed to {target} RPM.");
+        if latch_after_target {
+            c::send_command(&device, 0x0d02, &[mode_byte, 1, 0, 1])?;
+        }
+        let mut settled = 0;
+        for _ in 0..observe_seconds.div_ceil(2) {
+            thread::sleep(Duration::from_secs(2));
+            let sample = crate::thermal::read(&device)?;
+            ensure!(
+                ac_connected()?
+                    && sample.ec_celsius[0] > 0
+                    && sample.ec_celsius[0] < 90
+                    && sample.ec_celsius[1] < 80,
+                "Identification thermal guard reached; restoring automatic cooling"
+            );
+            if isolated_comparison {
+                ensure!(
+                    sample.modes.iter().all(|mode| mode[1] == 1),
+                    "Manual mode changed during observation"
+                );
+                let mut expected = [3000; 3];
+                expected[usize::from(zone - 1)] = target;
+                ensure!(sample.target_rpm == expected, "Fan targets changed during observation");
+                if sample
+                    .actual_rpm
+                    .iter()
+                    .zip(expected)
+                    .all(|(rpm, target)| rpm.abs_diff(target) <= 200)
+                {
+                    settled += 1;
+                } else {
+                    settled = 0;
+                }
+            }
+            let sample = serde_json::to_value(sample)?;
+            eprintln!("Identification zone {zone}: {sample}");
+            report["samples"].as_array_mut().unwrap().push(sample);
+            journal(&mut file, &report)?;
+        }
+        if isolated_comparison {
+            report["actual_rpm_verified"] = json!(settled >= 3);
+            ensure!(settled >= 3, "Isolated actual speeds did not settle to the requested targets");
+        }
+        Ok(())
+    })();
+    let third_restore = c::send_command(
+        &device,
+        0x0d01,
+        &[write_enable, 3, (thermal_original.target_rpm[2] / 100) as u8],
+    );
+    let restored = restore(&device, &original);
+    let third_after = crate::thermal::read(&device);
+    let passed = result.is_ok();
+    report["error"] = json!(result.err().map(|e| format!("{e:#}")));
+    report["restore_error"] = json!(restored.as_ref().err().map(|e| format!("{e:#}")));
+    report["restored"] = serde_json::to_value(restored.as_ref().ok())?;
+    report["third_restore_error"] =
+        json!(third_restore.as_ref().err().map(|error| format!("{error:#}")));
+    report["thermal_restored"] = serde_json::to_value(third_after.as_ref().ok())?;
+    report["complete"] = json!(true);
+    journal(&mut file, &report)?;
+    restored?;
+    third_restore?;
+    let third_after = third_after?;
+    ensure!(
+        third_after.target_rpm[2] == thermal_original.target_rpm[2]
+            && third_after.modes.iter().all(|mode| mode[1] == 0),
+        "Third-fan target or automatic-mode restoration readback mismatch"
+    );
+    ensure!(passed, "Identification stopped; captured settings restored; inspect report");
+    Ok(report)
+}
+
+fn validate_fan_targets(
+    path: &Path,
+    cases: &[([u16; 2], usize)],
+    full_thermal: bool,
+) -> Result<Value> {
     let mut file = File::options().write(true).create_new(true).open(path)?;
     let device = open()?;
     let original = read(&device)?;
+    ensure!(
+        original.fan_mode == FanMode::Auto && ac_connected()?,
+        "Fan validation requires automatic cooling and AC power"
+    );
     recovery_record(path, &original)?;
-    let mut report = json!({"original": original, "samples": [], "complete": false});
+    let mut report = json!({"original": original, "samples": [], "thermal_samples": [], "case_results": [], "actual_rpm_verified":false, "complete": false});
     journal(&mut file, &report)?;
     let result = (|| -> Result<()> {
         apply(&device, &Change::Performance(PerfMode::Balanced))?;
         for &(targets, count) in cases {
             apply(&device, &Change::ManualFanZones(targets))?;
+            let mut settled_samples = 0;
             for _ in 0..count {
                 thread::sleep(Duration::from_secs(5));
                 let observed = read(&device)?;
+                if observed
+                    .fan_actual
+                    .iter()
+                    .zip(targets)
+                    .all(|(actual, target)| actual.abs_diff(target) <= 200)
+                {
+                    settled_samples += 1;
+                } else {
+                    settled_samples = 0;
+                }
+                if full_thermal {
+                    let thermal = crate::thermal::read(&device)?;
+                    ensure!(
+                        thermal.ec_celsius[0] < 90 && thermal.ec_celsius[1] < 80,
+                        "Thermal guard reached; restoring captured settings"
+                    );
+                    report["thermal_samples"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(serde_json::to_value(thermal)?);
+                }
                 eprintln!(
                     "Fan request {targets:?}, setpoints {:?}, actual {:?}",
                     observed.fan_setpoints, observed.fan_actual
@@ -366,7 +630,11 @@ fn validate_fan_targets(path: &Path, cases: &[([u16; 2], usize)]) -> Result<Valu
                 report["samples"].as_array_mut().unwrap().push(serde_json::to_value(observed)?);
                 journal(&mut file, &report)?;
             }
+            report["case_results"].as_array_mut().unwrap().push(json!({"targets":targets, "consecutive_settled_samples":settled_samples, "passed":settled_samples>=3}));
+            journal(&mut file, &report)?;
+            ensure!(settled_samples >= 3, "Actual fan speeds did not settle within 200 RPM for three consecutive samples; restoring captured settings");
         }
+        report["actual_rpm_verified"] = json!(true);
         Ok(())
     })();
     let restored = restore(&device, &original);
@@ -452,6 +720,22 @@ pub fn validate_batch(path: &Path) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn manual_mode_resets_precede_targets_and_are_skipped_for_updates() {
+        let initial = manual_fan_commands([4500, 4000], true);
+        assert_eq!(initial.len(), 6);
+        for (index, zone) in (1..=2).enumerate() {
+            assert_eq!(initial[index * 3], (0x0d82, vec![0, zone, 0, 0]));
+            assert_eq!(initial[index * 3 + 1], (0x0d02, vec![0, zone, 0, 1]));
+            assert_eq!(initial[index * 3 + 2].0, 0x0d01);
+            assert_eq!(initial[index * 3 + 2].1[..2], [1, zone]);
+        }
+        assert_eq!(initial[2].1[2], 45);
+        assert_eq!(initial[5].1[2], 40);
+        let update = manual_fan_commands([4000, 4500], false);
+        assert_eq!(update.len(), 4);
+        assert!(update.iter().all(|(cmd, _)| *cmd != 0x0d02));
+    }
     #[test]
     fn recovery_snapshot_is_not_overwritten_and_rejects_other_models() {
         let path = std::env::temp_dir().join(format!(

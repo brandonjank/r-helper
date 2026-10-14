@@ -101,6 +101,31 @@ pub fn collect_sensors() -> Result<Value> {
     collect_impl(None, true, false, true)
 }
 
+/// Model-711 vendor capability getters, with no setter/table programming.
+pub fn collect_thermal_capabilities() -> Result<Value> {
+    let mut report = collect(None)?;
+    let device = open_blade18_diagnostic()?;
+    let mut getters = serde_json::Map::new();
+    for (name, command_id, args) in [
+        ("fan_id_list", 0x0d80, vec![0; 80]),
+        ("fan_information_class_0", 0x0d83, vec![0; 12]),
+        ("vga_hardware_information", 0x0d8a, vec![0; 2]),
+        ("synapse_ui_settings", 0x0d8b, vec![0; 2]),
+        ("sku_hardware_configuration", 0x0d8f, vec![0]),
+    ] {
+        let result = command::send_command(&device, command_id, &args);
+        getters.insert(
+            name.into(),
+            match result {
+                Ok(response) => json!({"ok":true,"response_args":response.get_args()}),
+                Err(error) => json!({"ok":false,"error":format!("{error:#}")}),
+            },
+        );
+    }
+    report["thermal_capabilities"] = json!({"source":"https://apps.razer.com/synapse/products/711/mw/rzDevice25.279816c47f47f21a061c.js","getters":getters});
+    Ok(report)
+}
+
 pub(crate) fn open_blade18_diagnostic() -> Result<Device> {
     ensure!(is_target_system(), "Brightness access requires a Blade 18 (2025)");
     let api = hidapi::HidApi::new()?;

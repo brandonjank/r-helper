@@ -157,3 +157,49 @@ Silent battery profiles. Static analysis completed with warnings in legacy code.
   Physical power-transition revalidation with the new event backend is pending.
 
 See [research and milestones](blade18-roadmap.md) for the feature plan and sources.
+
+## Three-fan mapping follow-up (2026-10-14)
+
+These observations qualify the earlier unequal-target result: register readback
+does not establish independent physical actuator control. Independent curves
+remain unverified and are not ready to enable.
+
+- Mode getters for selectors 1, 2 and 3 all report manual after enabling manual
+  mode through selector 1. The mode appears shared.
+- Test A (selector 1 target 4500 RPM): the owner felt the left rear vent strengthen.
+  Both main tachometers nevertheless ramped together, so this mapping is tentative.
+- Test B (selector 2 target 4500 RPM): the owner reported both vents / unclear.
+- Repeated Test C (selector 3 target 3000 to 3500 RPM, enable byte 1, 40 seconds):
+  the owner reported both rear vents. Main tachometers settled at 2900/2900 RPM,
+  and selector 3 at 3000 RPM despite its target reading 3500 RPM. This did not
+  isolate the battery fan or establish its physical location.
+- Test C restored and verified Balanced/Auto on all three selectors, stored
+  targets 2000/2000/3000, brightness 176, static logo and battery care disabled.
+  No restoration errors occurred. Raw report:
+  `diagnostic-reports/research/map-fan-3-repeat-live.json` (ignored locally).
+- A bounded 30-second two-thread CPU workload increased candidate EC field A
+  from about 69 to 81 C while B stayed around 46–48 C. This supports CPU-load
+  correlation for A, but neither CPU die accuracy nor the complete sensor map
+  has been validated against independent simultaneous references.
+
+Third-selector writes are confined to the explicit diagnostic lab path with
+captured-state recovery. The normal application does not offer third-fan control.
+Next investigation: compare Synapse's model-specific fan behavior and isolate
+whether the setter encoding, shared mode or telemetry requests explain the
+coupled ramps before implementing independent curve control.
+
+
+## Post-update actuation correction (2026-10-14)
+
+BIOS remains 2.01 because the owner skipped that updater. Controller getter is
+1.7; NVIDIA VBIOS is 98.03.5c.40.25. Separate EC/PD versions remain unconfirmed.
+
+Delayed target reassertion after entering shared Manual mode resolved the observed
+3000-RPM default behavior in bounded tests. Two 90-second unequal-target cases
+passed actual-RPM convergence checks in both directions; a third-selector 3500
+request reached 3400 while the main fans reached 4000/3900. All captured targets
+and Auto mode restored. Earlier owner airflow observations must be repeated with
+the new isolated baseline; no physical CPU/GPU/battery mapping is claimed.
+
+See [post-update details](blade18-post-update.md) for evidence, the four-logical-ID
+capability result, unsupported battery temperature, and remaining curve gates.

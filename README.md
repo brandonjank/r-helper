@@ -115,6 +115,18 @@ workflow tests the workspace and uploads optimized binaries as an artifact.
 
 ## Architecture
 
+### Blade 18 interface preview
+
+The Blade 18 window uses compact performance buttons, grouped fan and lighting
+controls, AC/battery profiles, and expandable diagnostics and update links.
+Unverified independent fan curves, RGB zones and tuning features are marked as
+in development. Sensor readings are explicit snapshots rather than background polling.
+
+Run `target/debug/rhelper.exe --preview-blade18` to inspect the interface with
+sample data and disabled hardware controls. Preview mode skips device detection,
+settings loading/saving, power notifications, automatic profile switching, tray
+hooks and exit-time hardware restoration. Normal launch uses the real device.
+
 Core device control via locally vendored `librazer` (derived from razer-ctl)
 
 

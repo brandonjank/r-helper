@@ -30,7 +30,8 @@ impl Desktop {
         let battery = MenuItem::with_id("battery", "Apply battery profile", true, None);
         let quit = MenuItem::with_id("quit", "Exit", true, None);
         menu.append_items(&[&show, &ac, &battery, &quit])?;
-        let source = image::load_from_memory(include_bytes!("../rhelper.ico"))?.into_rgba8();
+        let source =
+            image::load_from_memory(include_bytes!("../assets/r-helper-icon.ico"))?.into_rgba8();
         let icon = tray_icon::Icon::from_rgba(source.to_vec(), source.width(), source.height())?;
         let tray = TrayIconBuilder::new()
             .with_tooltip("R-Helper · Blade 18")

@@ -8,6 +8,7 @@ use librazer::{
     types::*,
 };
 use std::{path::PathBuf, sync::mpsc};
+mod view;
 
 struct Job {
     receiver: mpsc::Receiver<Result<State, String>>,
@@ -28,15 +29,17 @@ struct BladeApp {
     quitting: bool,
     manual_rpm: u16,
     shared_settings: std::sync::Arc<std::sync::Mutex<Settings>>,
-    power_watcher: crate::blade_power::Watcher,
+    power_watcher: Option<crate::blade_power::Watcher>,
     power_updates: mpsc::Receiver<crate::blade_power::Update>,
     power_error: Option<String>,
     sensor_job: Option<mpsc::Receiver<Result<serde_json::Value, String>>>,
     sensor_report: Option<serde_json::Value>,
+    preview: bool,
 }
 impl BladeApp {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let ctx = &cc.egui_ctx;
+        view::configure(ctx);
         use raw_window_handle::{HasWindowHandle, RawWindowHandle};
         let hwnd = match cc.window_handle().map(|handle| handle.as_raw()) {
             Ok(RawWindowHandle::Win32(handle)) => handle.hwnd.get(),
@@ -70,11 +73,12 @@ impl BladeApp {
             quitting: false,
             manual_rpm: blade18::FAN_MIN,
             shared_settings,
-            power_watcher,
+            power_watcher: Some(power_watcher),
             power_updates,
             power_error: None,
             sensor_job: None,
             sensor_report: None,
+            preview: false,
         };
         app.start(ctx, "Read device state", None, blade18::status);
         app
@@ -86,6 +90,9 @@ impl BladeApp {
         save_as: Option<bool>,
         operation: impl FnOnce() -> anyhow::Result<State> + Send + 'static,
     ) {
+        if self.preview {
+            return;
+        }
         if self.job.is_some() || self.sensor_job.is_some() {
             self.message = "Wait for the current device operation".into();
             return;
@@ -100,6 +107,9 @@ impl BladeApp {
         });
     }
     fn persist(&mut self) {
+        if self.preview {
+            return;
+        }
         if self.settings_error.is_some() {
             self.message = "Settings file needs repair; original preserved".into();
             return;
@@ -248,7 +258,9 @@ impl eframe::App for BladeApp {
         }
         while let Ok(update) = self.power_updates.try_recv() {
             self.last_power = update.ac;
-            if let Some(error) = update.monitor_error { self.power_error = Some(error); }
+            if let Some(error) = update.monitor_error {
+                self.power_error = Some(error);
+            }
             if let Some(result) = update.result {
                 match result {
                     Ok(state) => {
@@ -268,7 +280,9 @@ impl eframe::App for BladeApp {
                 }
             }
         }
-        if ctx.input(|input| input.viewport().close_requested()) && (self.job.is_some() || self.sensor_job.is_some()) {
+        if ctx.input(|input| input.viewport().close_requested())
+            && (self.job.is_some() || self.sensor_job.is_some())
+        {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.message = "Wait for the current device operation before closing".into();
         } else if ctx.input(|input| input.viewport().close_requested())
@@ -279,118 +293,40 @@ impl eframe::App for BladeApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
         }
         let idle = self.job.is_none() && self.sensor_job.is_none();
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("R-Helper · Blade 18 (2025)");
-            ui.horizontal(|ui| {
-                ui.label(match self.last_power { Some(true) => "Plugged in", Some(false) => "On battery", None => "Power source unknown" });
-                if ui.add_enabled(idle, egui::Button::new("Refresh device state")).clicked() { self.start(ctx, "Read device state", None, blade18::status); }
-                if ui.button("Copy report").clicked() { ctx.copy_text(self.report.clone()); }
-                if self.desktop.is_some() && ui.button("Hide to tray").clicked() { ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false)); }
-                if ui.add_enabled(idle, egui::Button::new("Exit")).clicked() { self.action(ctx, Action::Quit); }
-            });
-            ui.label(&self.message); if !idle { ui.spinner(); }
-            if let Some(error) = &self.desktop_error { ui.colored_label(egui::Color32::DARK_RED, error); }
-            if let Some(error) = &self.power_error { ui.colored_label(egui::Color32::DARK_RED, error); }
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                let mut requested = None;
-                if let Some(state) = &mut self.state {
-                    ui.add_enabled_ui(idle, |ui| {
-                        ui.separator();
-                        ui.horizontal(|ui| {
-                            ui.label("Keyboard brightness"); ui.add(egui::Slider::new(&mut state.brightness, 0..=255).suffix(" / 255"));
-                            if ui.button("Apply brightness").clicked() { requested = Some(Change::Brightness(state.brightness)); }
-                        });
-                        ui.horizontal(|ui| { ui.label("Logo"); for mode in [LogoMode::Off, LogoMode::Static, LogoMode::Breathing] {
-                            if ui.selectable_label(state.logo == mode, format!("{mode:?}")).clicked() { requested = Some(Change::Logo(mode)); }
-                        } });
-                        ui.horizontal(|ui| { ui.label("Battery care (80% target)"); for mode in [BatteryCare::Enable, BatteryCare::Disable] {
-                            if ui.selectable_label(state.battery_care == mode, format!("{mode:?}")).clicked() { requested = Some(Change::BatteryCare(mode)); }
-                        } });
-                        ui.horizontal(|ui| { ui.label("Performance"); for mode in blade18::MODES {
-                            let available = self.last_power == Some(true) || matches!(mode, PerfMode::Balanced | PerfMode::Silent);
-                            if ui.add_enabled(available, egui::Button::new(format!("{mode:?}")).selected(state.performance == *mode)).clicked() { requested = Some(Change::Performance(*mode)); }
-                        } });
-                        if state.performance == PerfMode::Custom {
-                            let mut cpu = state.cpu.unwrap_or(CpuBoost::Low); let mut gpu = state.gpu.unwrap_or(GpuBoost::Low);
-                            ui.horizontal(|ui| { ui.label("CPU"); for level in [CpuBoost::Low, CpuBoost::Medium, CpuBoost::High, CpuBoost::Boost] { ui.selectable_value(&mut cpu, level, format!("{level:?}")); } });
-                            ui.horizontal(|ui| { ui.label("GPU"); for level in [GpuBoost::Low, GpuBoost::Medium, GpuBoost::High] { ui.selectable_value(&mut gpu, level, format!("{level:?}")); }
-                                if ui.button("Apply CPU/GPU").clicked() { requested = Some(Change::Boosts(cpu, gpu)); } });
-                            state.cpu = Some(cpu); state.gpu = Some(gpu);
-                        }
-                        ui.horizontal(|ui| { ui.label(format!("Fan zones: {} / {} RPM actual · {:?}", state.fan_actual[0], state.fan_actual[1], state.fan_mode));
-                            if ui.button("Automatic fans").clicked() { requested = Some(Change::AutoFans); } });
-                        ui.add_enabled_ui(blade18::MANUAL_FANS_VERIFIED && state.performance == PerfMode::Balanced, |ui| { ui.horizontal(|ui| {
-                            ui.add(egui::Slider::new(&mut self.manual_rpm, blade18::FAN_MIN..=blade18::FAN_MAX).step_by(100.0).suffix(" RPM"));
-                            if ui.button("Apply manual fans").clicked() { requested = Some(Change::ManualFans(self.manual_rpm)); }
-                        }); });
-                        ui.label("Manual fan targets are experimental. Actual RPM can differ and ramps slowly; use Refresh to check.");
-                    });
-                }
-                if let Some(change) = requested { self.start(ctx, "Apply setting", None, move || blade18::change(change)); }
-                ui.separator();
-                ui.strong("Controller sensors");
-                if ui.add_enabled(idle, egui::Button::new("Read controller sensors")).clicked() {
-                    let (sender, receiver) = mpsc::channel();
-                    self.sensor_job = Some(receiver);
-                    self.message = "Reading controller sensor candidates…".into();
-                    let repaint = ctx.clone();
-                    std::thread::spawn(move || {
-                        let _ = sender.send(librazer::diagnostics::collect_sensors().map_err(|error| format!("{error:#}")));
-                        repaint.request_repaint();
-                    });
-                }
-                ui.label("On-demand snapshots; third-fan mapping is pending. No third-fan writes or background sensor polling.");
-                if let Some(report) = &self.sensor_report {
-                    let getters = &report["sensor_candidates"]["getters"];
-                    for (key, label, rpm) in [
-                        ("controller_firmware", "Controller firmware", false),
-                        ("fan_zone_3_actual_rpm", "Third fan candidate · actual", true),
-                        ("fan_zone_3_stored_rpm", "Third fan candidate · stored target", true),
-                        ("ec_temperature_fields", "EC temperature candidates", false),
-                    ] {
-                        let reading = &getters[key];
-                        if reading["ok"] == true {
-                            if rpm {
-                                if let Some(value) = reading["response_args"][2].as_u64() { ui.label(format!("{label}: {} RPM", value * 100)); }
-                            } else if key == "controller_firmware" {
-                                let bytes = &reading["response_args"];
-                                ui.label(format!("{label}: {}.{}", bytes[0], bytes[1]));
-                            } else if key == "ec_temperature_fields" {
-                                let bytes = &reading["response_args"];
-                                ui.label(format!("EC sensor A: {} °C · sensor B: {} °C (candidate values; CPU/GPU die mapping unverified)", bytes[1], bytes[2]));
-                            } else { ui.label(format!("{label}: {} (raw bytes)", reading["response_args"])); }
-                        } else { ui.label(format!("{label}: unavailable · {}", reading["error"].as_str().unwrap_or("No valid reading"))); }
-                    }
-                }
-                ui.separator(); ui.strong("Saved profiles");
-                ui.add_enabled_ui(idle && self.settings_error.is_none(), |ui| {
-                    ui.horizontal(|ui| {
-                        if ui.button("Save current as AC").clicked() { self.start(ctx, "Save AC profile", Some(true), blade18::status); }
-                        if ui.button("Save current as battery").clicked() { self.start(ctx, "Save battery profile", Some(false), blade18::status); }
-                        if ui.add_enabled(self.settings.ac.is_some(), egui::Button::new("Apply AC profile")).clicked() { self.apply_saved(ctx, true); }
-                        if ui.add_enabled(self.settings.battery.is_some(), egui::Button::new("Apply battery profile")).clicked() { self.apply_saved(ctx, false); }
-                    });
-                    if ui.add_enabled(self.settings.ac.is_some() && self.settings.battery.is_some(), egui::Checkbox::new(&mut self.settings.automatic, "Automatically switch on AC/battery transitions")).changed() { self.persist(); }
-                });
-                if let Some(error) = &self.settings_error { ui.colored_label(egui::Color32::DARK_RED, error); }
-                ui.label("Ctrl+Shift+Alt: F12 show · F5 cycle mode · F6 AC profile · F7 battery profile");
-                ui.collapsing("Device report", |ui| { ui.add(egui::TextEdit::multiline(&mut self.report).font(egui::TextStyle::Monospace).desired_width(f32::INFINITY).interactive(false).desired_rows(18)); });
-            });
-        });
+        self.render(ctx, idle);
     }
     fn on_exit(&mut self, _: Option<&eframe::glow::Context>) {
-        self.power_watcher.stop();
+        if self.preview {
+            return;
+        }
+        if let Some(watcher) = &mut self.power_watcher {
+            watcher.stop();
+        }
         if self.state.as_ref().is_some_and(|state| state.fan_mode == FanMode::Manual) {
             let _ = blade18::change(Change::AutoFans);
         }
     }
 }
 pub fn run() -> Result<(), eframe::Error> {
+    run_with_preview(false)
+}
+pub fn run_preview() -> Result<(), eframe::Error> {
+    run_with_preview(true)
+}
+fn run_with_preview(preview: bool) -> Result<(), eframe::Error> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("R-Helper · Blade 18")
-            .with_inner_size([840.0, 650.0]),
+            .with_icon(crate::load_icon())
+            .with_title(if preview { "R-Helper · UI Preview" } else { "R-Helper · Blade 18" })
+            .with_inner_size([540.0, 790.0])
+            .with_min_inner_size([480.0, 560.0]),
         ..Default::default()
     };
-    eframe::run_native("R-Helper Blade 18", options, Box::new(|cc| Ok(Box::new(BladeApp::new(cc)))))
+    eframe::run_native(
+        "R-Helper Blade 18",
+        options,
+        Box::new(move |cc| {
+            Ok(Box::new(if preview { BladeApp::preview(cc) } else { BladeApp::new(cc) }))
+        }),
+    )
 }
