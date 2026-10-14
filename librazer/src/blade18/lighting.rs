@@ -78,13 +78,63 @@ fn static_matches(effect: &[u8], rgb: [u8; 3]) -> bool {
         && effect[6..] == rgb
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum KeyboardEffect {
+    Static,
+    Breathing,
+    Spectrum,
+}
+impl KeyboardEffect {
+    fn packet(self, rgb: [u8; 3]) -> Vec<u8> {
+        match self {
+            Self::Static | Self::Breathing => vec![
+                1,
+                5,
+                if self == Self::Static { 1 } else { 2 },
+                0,
+                1,
+                1,
+                rgb[0],
+                rgb[1],
+                rgb[2],
+            ],
+            Self::Spectrum => vec![1, 5, 3, 0, 0, 0, 0, 0, 0],
+        }
+    }
+    fn matches(self, data: &[u8], rgb: [u8; 3]) -> bool {
+        let args = self.packet(rgb);
+        if self == Self::Spectrum {
+            return data == &args[..6];
+        }
+        data.len() == args.len() && data[..4] == args[..4] && data[4] <= 1 && data[5..] == args[5..]
+    }
+}
+fn recoverable_packet(data: &[u8]) -> Option<Vec<u8>> {
+    let rgb = if data.len() == 9 { [data[6], data[7], data[8]] } else { [0; 3] };
+    [KeyboardEffect::Static, KeyboardEffect::Breathing]
+        .into_iter()
+        .find(|effect| effect.matches(data, rgb))
+        .map(|effect| effect.packet(rgb))
+}
+
 /// Explicit handoff: custom-frame pixels cannot be recovered from effect metadata.
 /// Caller must make replacement of the current keyboard effect visible to the user.
 pub fn keyboard_static(rgb: [u8; 3], journal_path: &Path) -> Result<Lighting> {
+    keyboard_effect(KeyboardEffect::Static, rgb, journal_path)
+}
+pub fn keyboard_effect(
+    effect: KeyboardEffect,
+    rgb: [u8; 3],
+    journal_path: &Path,
+) -> Result<Lighting> {
+    ensure!(
+        effect != KeyboardEffect::Spectrum,
+        "Spectrum is advertised but did not apply on this firmware; no write sent"
+    );
     let mut file = File::options().create_new(true).write(true).open(journal_path)?;
     let device = open()?;
     let original = read(&device)?;
-    let args = [1, 5, 1, 0, 1, 1, rgb[0], rgb[1], rgb[2]];
+    let args = effect.packet(rgb);
     super::journal(
         &mut file,
         &serde_json::json!({"model":"RZ09-0529","operation":"keyboard_static",
@@ -95,7 +145,7 @@ pub fn keyboard_static(rgb: [u8; 3], journal_path: &Path) -> Result<Lighting> {
         thread::sleep(Duration::from_millis(250));
         let after = read(&device)?;
         ensure!(
-            static_matches(&after.keyboard_effect, rgb),
+            effect.matches(&after.keyboard_effect, rgb),
             "Keyboard static readback mismatch: {:?}",
             after.keyboard_effect
         );
@@ -110,19 +160,13 @@ pub fn keyboard_static(rgb: [u8; 3], journal_path: &Path) -> Result<Lighting> {
         );
         Ok(after)
     })();
-    let rollback = if result.is_err()
-        && original.keyboard_effect.len() == 9
-        && static_matches(
-            &original.keyboard_effect,
-            [original.keyboard_effect[6], original.keyboard_effect[7], original.keyboard_effect[8]],
-        ) {
-        let mut previous = original.keyboard_effect.clone();
-        previous[4] = 1;
+    let rollback = if result.is_err() && recoverable_packet(&original.keyboard_effect).is_some() {
+        let previous = recoverable_packet(&original.keyboard_effect).unwrap();
         Some(c::send_command(&device, 0x0f02, &previous).and_then(|_| {
             thread::sleep(Duration::from_millis(250));
             let after = read(&device)?;
             ensure!(
-                static_matches(&after.keyboard_effect, [previous[6], previous[7], previous[8]]),
+                recoverable_packet(&after.keyboard_effect) == Some(previous.clone()),
                 "Previous static color recovery mismatch"
             );
             Ok(())
@@ -142,6 +186,54 @@ pub fn keyboard_static(rgb: [u8; 3], journal_path: &Path) -> Result<Lighting> {
         return Err(error.context("Static keyboard rollback failed"));
     }
     result
+}
+
+pub fn validate_keyboard_effects(path: &Path) -> Result<serde_json::Value> {
+    let mut file = File::options().create_new(true).write(true).open(path)?;
+    let device = open()?;
+    let original = read(&device)?;
+    let restore = recoverable_packet(&original.keyboard_effect)
+        .context("Effect test requires a recoverable firmware baseline")?;
+    let mut recovery =
+        File::options().create_new(true).write(true).open(path.with_extension("recovery.json"))?;
+    super::journal(
+        &mut recovery,
+        &serde_json::json!({"model":"RZ09-0529","operation":"keyboard_static_recovery","original":original}),
+    )?;
+    let mut cases = Vec::new();
+    for effect in [KeyboardEffect::Breathing] {
+        let rgb = [32, 64, 255];
+        let args = effect.packet(rgb);
+        let outcome = (|| {
+            c::send_command(&device, 0x0f02, &args)?;
+            thread::sleep(Duration::from_secs(4));
+            let after = read(&device)?;
+            let mut expected = original.clone();
+            expected.keyboard_effect = after.keyboard_effect.clone();
+            ensure!(
+                effect.matches(&after.keyboard_effect, rgb) && after == expected,
+                "Effect or independent lighting readback mismatch: {after:?}"
+            );
+            Ok::<_, anyhow::Error>(after)
+        })();
+        let restored = c::send_command(&device, 0x0f02, &restore).and_then(|_| {
+            thread::sleep(Duration::from_millis(250));
+            let after = read(&device)?;
+            ensure!(after == original, "Effect restoration mismatch");
+            Ok(())
+        });
+        cases.push(serde_json::json!({"effect":effect,"passed":outcome.is_ok(),"readback":outcome.as_ref().ok(),"error":outcome.err().map(|e|format!("{e:#}")),"restored":restored.is_ok()}));
+        super::journal(
+            &mut file,
+            &serde_json::json!({"keyboard_effect_validation":{"original":original,"cases":cases}}),
+        )?;
+        restored?;
+    }
+    ensure!(
+        cases.iter().all(|v| v["passed"] == true),
+        "Effect validation failed; original effect restored"
+    );
+    Ok(serde_json::json!({"keyboard_effect_validation":{"original":original,"cases":cases}}))
 }
 
 /// Requires an already recoverable firmware static effect; never adopts CustomFrame.
@@ -204,20 +296,18 @@ pub fn restore_keyboard_record(path: &Path) -> Result<Lighting> {
     );
     let original: Lighting = serde_json::from_value(record["original"].clone())?;
     let data = &original.keyboard_effect;
-    ensure!(
-        data.len() == 9 && static_matches(data, [data[6], data[7], data[8]]),
-        "Recovery is not a verified static-color shape"
-    );
+    let args = recoverable_packet(data).context("Recovery is not a verified firmware effect")?;
     let device = open()?;
     let before = read(&device)?;
-    let mut args = data.clone();
-    args[4] = 1;
     c::send_command(&device, 0x0f02, &args)?;
     thread::sleep(Duration::from_millis(250));
     let after = read(&device)?;
     let mut expected = before;
-    expected.keyboard_effect = original.keyboard_effect;
-    ensure!(after == expected, "Static keyboard recovery mismatch");
+    expected.keyboard_effect = after.keyboard_effect.clone();
+    ensure!(
+        recoverable_packet(&after.keyboard_effect) == Some(args) && after == expected,
+        "Keyboard effect recovery mismatch"
+    );
     Ok(after)
 }
 
@@ -389,6 +479,17 @@ pub fn restore_record(path: &Path) -> Result<Lighting> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_verified_firmware_effects_can_be_recovered() {
+        assert_eq!(
+            recoverable_packet(&[1, 5, 2, 0, 0, 1, 32, 64, 255]),
+            Some(vec![1, 5, 2, 0, 1, 1, 32, 64, 255])
+        );
+        assert!(recoverable_packet(&[1, 5, 8, 0, 0, 0]).is_none());
+        assert!(recoverable_packet(&[1, 5, 3, 0, 0, 0]).is_none());
+        assert!(recoverable_packet(&[1, 4, 2, 0, 0, 1, 32, 64, 255]).is_none());
+        assert!(recoverable_packet(&[1, 5, 2, 0, 0, 2, 32, 64, 255, 0, 0, 0]).is_none());
+    }
     #[test]
     fn switch_decoder_rejects_unknown_values_and_selectors() {
         assert!(!read_bool(&[0, 38, 0], &[0, 38]).unwrap());

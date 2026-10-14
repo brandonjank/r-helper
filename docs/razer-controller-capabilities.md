@@ -55,6 +55,13 @@ No battery-temperature source has been found: Windows battery-class temperature
 query returns unsupported. A central/battery-area fan is not a temperature sensor.
 Present-device inventory still finds no 1534 devices on this laptop.
 
+Windows display integration now provides driver-tested 60/120/240 Hz at the
+current 2560×1600 resolution, with per-power-source refresh choices. Physical
+hidden-app AC/battery switching passed. This is separate from HID panel-mode or
+dual-resolution switching; see [display validation](blade18-display.md).
+Firmware keyboard Breathing passed readback/restoration and owner visual
+confirmation. Advertised Spectrum did not apply in the tested forms and is blocked.
+
 ## Sources
 
 - [Razer model-711 middleware](https://apps.razer.com/synapse/products/711/mw/main.c953ca79d6a9fe3975bd.js): model feature flags and firmware gates.

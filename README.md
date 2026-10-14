@@ -146,6 +146,10 @@ other source-backed controls and their current verification status.
 startup-animation and independent underside switches/brightness, static keyboard RGB,
 single-color logo, and remaining Chroma color-control work.
 
+[Internal-panel refresh profiles](docs/blade18-display.md) support driver-tested
+same-resolution rates with separate AC/battery choices. Firmware keyboard
+Breathing is available; advertised Spectrum remains disabled after failed readback.
+
 
 ## License
 

@@ -76,9 +76,10 @@ impl Watcher {
                 let result = blade_profiles::transition(previous, current, saved.automatic)
                     .and_then(|ac| {
                         let profile = if ac { saved.ac } else { saved.battery };
+                        let display = if ac { saved.display_ac } else { saved.display_battery };
                         profile.map(|profile| {
                             stopped
-                                .and_then(|_| blade18::apply_profile(&profile))
+                                .and_then(|_| blade_profiles::apply(&profile,display.as_ref()))
                                 .map_err(|error| format!("{error:#}"))
                         })
                     });

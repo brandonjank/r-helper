@@ -39,6 +39,8 @@ struct BladeApp {
     lighting: Option<blade18::lighting::Lighting>,
     keyboard_color: [u8;3],
     underside_brightness: u8,
+    keyboard_effect: blade18::lighting::KeyboardEffect,
+    display: Option<librazer::display::Info>,
     preview: bool,
     curve_settings: blade18::CurveSettings,
     curve_error: Option<String>,
@@ -103,6 +105,8 @@ impl BladeApp {
             lighting: None,
             keyboard_color: [32,64,255],
             underside_brightness: 64,
+            keyboard_effect: blade18::lighting::KeyboardEffect::Static,
+            display: None,
             preview: false,
             curve_settings,
             curve_error,
@@ -170,13 +174,15 @@ impl BladeApp {
         };
     }
     fn apply_saved(&mut self, ctx: &egui::Context, ac: bool) {
+        self.display=None;
         let profile = if ac { self.settings.ac.clone() } else { self.settings.battery.clone() };
+        let display = if ac { self.settings.display_ac.clone() } else { self.settings.display_battery.clone() };
         if let Some(profile) = profile {
             self.start(
                 ctx,
                 if ac { "Apply AC profile" } else { "Apply battery profile" },
                 None,
-                move || blade18::apply_profile(&profile),
+                move || blade_profiles::apply(&profile,display.as_ref()),
             );
         } else {
             self.message = "Save that profile first".into();
@@ -281,9 +287,14 @@ impl BladeApp {
                     if report["lighting_controls"].is_object() {
                         self.lighting = serde_json::from_value(report["lighting_controls"].clone()).ok();
                         if let Some(lighting)=&self.lighting { self.underside_brightness=lighting.underside_brightness; }
-                        if let Some(effect)=self.lighting.as_ref().map(|v| &v.keyboard_effect) {
-                            if effect.len()==9 && effect[2]==1 { self.keyboard_color.copy_from_slice(&effect[6..9]); }
+                        if let Some(id)=self.lighting.as_ref().and_then(|s|s.keyboard_effect.get(2)) {
+                            self.keyboard_effect=match id {2=>blade18::lighting::KeyboardEffect::Breathing,3=>blade18::lighting::KeyboardEffect::Spectrum,_=>blade18::lighting::KeyboardEffect::Static};
                         }
+                        if let Some(effect)=self.lighting.as_ref().map(|v| &v.keyboard_effect) {
+                            if effect.len()==9 && matches!(effect[2],1|2) { self.keyboard_color.copy_from_slice(&effect[6..9]); }
+                        }
+                    } else if report["display_controls"].is_object() {
+                        self.display=serde_json::from_value(report["display_controls"].clone()).ok();
                     } else if report["thermal_capabilities"].is_object() {
                         self.capability_report = Some(report);
                     } else {
@@ -293,6 +304,7 @@ impl BladeApp {
                     self.message = "Controller query complete · exported report available".into();
                 }
                 Ok(Err(error)) => {
+                    self.display=None;
                     self.lighting = None;
                     self.sensor_report = None;
                     self.sensor_job = None;
@@ -358,6 +370,7 @@ impl eframe::App for BladeApp {
             }
         }
         while let Ok(update) = self.power_updates.try_recv() {
+            if update.ac!=self.last_power {self.display=None;}
             self.last_power = update.ac;
             if let Some(error) = update.monitor_error {
                 self.power_error = Some(error);

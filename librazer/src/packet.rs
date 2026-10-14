@@ -58,7 +58,7 @@ impl Packet {
             // Exact model-711 callers: startup uses profile 0; underside uses class 1.
             0x0f18 => matches!(args, [0, 0 | 1]),
             // Bounded firmware static keyboard RGB, profile 1 / region 5 only.
-            0x0f02 => matches!(args, [1, 5, 1, 0, 1, 1, _, _, _]),
+            0x0f02 => matches!(args, [1, 5, 1 | 2, 0, 1, 1, _, _, _]),
             0x0300 if matches!(args, [1, 38, 0 | 1]) => true,
             0x0303 => matches!(args, [1, 38, _]),
             0x0300 => matches!(args, [1, 4, 0 | 1]),
@@ -233,7 +233,7 @@ mod diagnostic_tests {
                 args[field] = value;
                 assert_eq!(
                     Packet::new(0x0f02, &args).ensure_blade18_access().is_ok(),
-                    value == valid[field]
+                    value == valid[field] || (field == 2 && value == 2)
                 );
             }
         }

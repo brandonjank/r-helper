@@ -14,15 +14,29 @@ pub struct Settings {
     pub ac: Option<Profile>,
     pub battery: Option<Profile>,
     pub automatic: bool,
+    #[serde(default)]
+    pub display_ac: Option<librazer::display::Profile>,
+    #[serde(default)]
+    pub display_battery: Option<librazer::display::Profile>,
 }
 impl Default for Settings {
     fn default() -> Self {
-        Self { schema: 1, ac: None, battery: None, automatic: false }
+        Self {
+            schema: 1,
+            ac: None,
+            battery: None,
+            automatic: false,
+            display_ac: None,
+            display_battery: None,
+        }
     }
 }
 impl Settings {
     pub fn validate(&self) -> Result<()> {
         ensure!(self.schema == 1, "Unknown settings schema");
+        for profile in [&self.display_ac, &self.display_battery].into_iter().flatten() {
+            profile.validate()?;
+        }
         if let Some(profile) = &self.ac {
             profile.validate(false)?;
         }
@@ -35,6 +49,26 @@ impl Settings {
         );
         Ok(())
     }
+}
+pub fn apply(
+    profile: &Profile,
+    display: Option<&librazer::display::Profile>,
+) -> Result<librazer::blade18::State> {
+    let before = if let Some(target) = display {
+        let before = librazer::display::inventory()?.current;
+        librazer::display::apply(target)?;
+        Some(before)
+    } else {
+        None
+    };
+    let result = librazer::blade18::apply_profile(profile);
+    if result.is_err() {
+        if let Some(before) = before {
+            librazer::display::apply(&before)
+                .context("Display rollback after power-profile failure failed")?;
+        }
+    }
+    result
 }
 pub fn path() -> Result<PathBuf> {
     Ok(PathBuf::from(std::env::var_os("LOCALAPPDATA").context("LOCALAPPDATA is not set")?)
@@ -80,6 +114,20 @@ pub fn transition(previous: Option<bool>, current: Option<bool>, enabled: bool) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn old_profiles_leave_display_unchanged_and_invalid_display_is_rejected() {
+        let mut settings: Settings =
+            serde_json::from_str(r#"{"schema":1,"ac":null,"battery":null,"automatic":false}"#)
+                .unwrap();
+        assert!(settings.display_ac.is_none() && settings.display_battery.is_none());
+        settings.display_ac = Some(librazer::display::Profile {
+            panel: "panel".into(),
+            width: 2560,
+            height: 1600,
+            hz: 0,
+        });
+        assert!(settings.validate().is_err());
+    }
     #[test]
     fn power_transitions_ignore_startup_unknown_and_disabled_events() {
         assert_eq!(transition(None, Some(true), true), None);

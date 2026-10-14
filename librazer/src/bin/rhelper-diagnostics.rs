@@ -6,6 +6,11 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(version)]
 struct Args {
+    /// Save a read-only current-state snapshot accepted by --restore-state.
+    #[arg(long,requires="output",conflicts_with_all=["validate_keyboard_effects","keyboard_static","validate_keyboard_static","restore_keyboard","probe","probe_interface","probe_lighting","probe_sensors","probe_thermal_capabilities","validate_lighting_switches","restore_lighting","validate_brightness","validate_batch","validate_fans","validate_fan_zones","identify_main_fan","restore_state"])]
+    capture_state: bool,
+    #[arg(long,requires="output",conflicts_with_all=["keyboard_static","validate_keyboard_static","restore_keyboard","probe","probe_interface","probe_lighting","probe_sensors","probe_thermal_capabilities","validate_lighting_switches","restore_lighting","validate_brightness","validate_batch","validate_fans","validate_fan_zones","identify_main_fan","restore_state"])]
+    validate_keyboard_effects: bool,
     /// Test RGB primaries and restore an already-static keyboard; never adopts Chroma.
     #[arg(long, requires="output", conflicts_with_all=["keyboard_static", "take_keyboard_control", "restore_keyboard", "probe", "probe_interface", "probe_lighting", "probe_sensors", "probe_thermal_capabilities", "validate_lighting_switches", "restore_lighting", "validate_brightness", "validate_batch", "validate_fans", "validate_fan_zones", "identify_main_fan", "restore_state"])]
     validate_keyboard_static: bool,
@@ -85,6 +90,30 @@ struct Args {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    if args.capture_state {
+        use std::io::Write;
+        let mut file = std::fs::File::options()
+            .create_new(true)
+            .write(true)
+            .open(args.output.as_ref().unwrap())?;
+        let state = librazer::blade18::status()?;
+        serde_json::to_writer_pretty(
+            &mut file,
+            &serde_json::json!({"model":"RZ09-0529","original":state}),
+        )?;
+        file.flush()?;
+        file.sync_all()?;
+        return Ok(());
+    }
+    if args.validate_keyboard_effects {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&librazer::blade18::lighting::validate_keyboard_effects(
+                args.output.as_ref().unwrap()
+            )?)?
+        );
+        return Ok(());
+    }
     if args.validate_keyboard_static {
         println!(
             "{}",

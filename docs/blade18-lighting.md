@@ -57,7 +57,15 @@ passed readback, preserved other lighting settings and restored static #2040FF
 after each case. Blue held for several minutes with Synapse still open and no
 R-Helper frame worker. This does not establish persistence across boot, power
 changes or Synapse profile changes. Reapplying a Synapse preset can reclaim the
-keyboard. Other firmware effects and custom-frame streaming remain blocked.
+keyboard. Breathing is now implemented as a firmware effect with one selected
+RGB color; its readback and restoration passed. Spectrum is advertised, but
+three bounded source-backed payload forms were acknowledged without changing
+the static effect. It remains disabled and its setter is blocked. Failed reports
+and successful restorations are retained locally (`keyboard-effects-*20261014.json`).
+There is no host animation loop. Custom-frame streaming remains blocked.
+The native Breathing selector passed independent readback and the owner confirmed
+blue fading in/out without other lights changing. The pre-test static blue was
+restored afterward.
 
 Region 38 has independently verified enable and brightness controls, but is absent from the
 Chroma region list. This does not establish independent underside RGB colors.

@@ -100,6 +100,8 @@ impl BladeApp {
             lighting: None,
             keyboard_color: [32,64,255],
             underside_brightness: 64,
+            keyboard_effect: blade18::lighting::KeyboardEffect::Static,
+            display: None,
             curve_settings: blade18::CurveSettings::default(),
             curve_error: None,
             curve_events: None,
@@ -122,6 +124,9 @@ impl BladeApp {
         let mut read_lighting = false;
         let mut lighting_change = None;
         let mut keyboard_static = None;
+        let mut read_display=false;
+        let mut apply_display=None;
+        let mut save_display_profiles=false;
         egui::CentralPanel::default().frame(egui::Frame::new().fill(Color32::from_rgb(19,22,27)).inner_margin(18)).show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
@@ -207,14 +212,17 @@ impl BladeApp {
                         if let Some(lighting)=&self.lighting {
                             ui.add_enabled_ui(enabled, |ui| {
                                 ui.horizontal(|ui| {
-                                    ui.label("Static keyboard color");
+                                    egui::ComboBox::from_id_salt("keyboard_effect").selected_text(format!("{:?}",self.keyboard_effect)).show_ui(ui,|ui|{
+                                        for effect in [blade18::lighting::KeyboardEffect::Static,blade18::lighting::KeyboardEffect::Breathing] {ui.selectable_value(&mut self.keyboard_effect,effect,format!("{effect:?}"));}
+                                    });
                                     ui.color_edit_button_srgb(&mut self.keyboard_color);
                                     ui.monospace(format!("#{:02X}{:02X}{:02X}",self.keyboard_color[0],self.keyboard_color[1],self.keyboard_color[2]));
-                                    if ui.button("Apply color").clicked() { keyboard_static=Some(self.keyboard_color); }
+                                    if ui.button("Apply effect").clicked() { keyboard_static=Some((self.keyboard_effect,self.keyboard_color)); }
                                 });
                             });
                             hint(ui,"Apply replaces the current keyboard effect.");
                             hint(ui,"Reapply a Synapse preset to return to Chroma.");
+                            hint(ui,"Spectrum is advertised but did not apply on this firmware.");
                             let mut underside=lighting.underside;
                             let mut startup=lighting.startup_animation;
                             if ui.add_enabled(enabled,egui::Checkbox::new(&mut underside,"Underside light")).changed() {
@@ -284,7 +292,23 @@ impl BladeApp {
                         hint(ui,"Read-only discovery · no graphics, panel or animation changes");
                     });
                     ui.collapsing("Display + NVIDIA tuning", |ui| {
-                        hint(ui, "Refresh-rate switching and NVIDIA tuning are planned. Controls will appear after support is implemented.");
+                        if ui.add_enabled(enabled,egui::Button::new("Read refresh rates")).clicked(){read_display=true;}
+                        if let Some(info)=self.display.clone() {
+                            ui.label(format!("Internal panel · {} × {} · {} Hz",info.current.width,info.current.height,info.current.hz));
+                            ui.horizontal(|ui|{for hz in &info.rates {if ui.add_enabled(enabled,egui::Button::new(format!("{hz} Hz"))).clicked(){let mut p=info.current.clone();p.hz=*hz;apply_display=Some(p);}}});
+                            for ac in [true,false] {
+                                let target=if ac {&mut self.settings.display_ac}else{&mut self.settings.display_battery};
+                                ui.add_enabled_ui(enabled && self.settings_error.is_none(),|ui|{ui.horizontal(|ui|{
+                                    ui.label(if ac {"Plugged in"}else{"On battery"});
+                                    egui::ComboBox::from_id_salt(("display_rate",ac)).selected_text(target.as_ref().map(|p|format!("{} Hz",p.hz)).unwrap_or("Unchanged".into())).show_ui(ui,|ui|{
+                                        if ui.selectable_label(target.is_none(),"Unchanged").clicked(){*target=None;save_display_profiles=true;}
+                                        for hz in &info.rates {if ui.selectable_label(target.as_ref().is_some_and(|p|p.hz==*hz),format!("{hz} Hz")).clicked(){let mut p=info.current.clone();p.hz=*hz;*target=Some(p);save_display_profiles=true;}}
+                                    });
+                                });});
+                            }
+                            hint(ui,"Refresh profiles use automatic power switching. Resolution stays unchanged.");
+                        }
+                        hint(ui,"NVIDIA clock and voltage tuning is planned.");
                     });
                     ui.collapsing("BIOS + drivers", |ui| {
                         if let Some(report) = &self.sensor_report {
@@ -325,10 +349,15 @@ impl BladeApp {
         if let Some(change) = requested {
             self.start(ctx, "Apply setting", None, move || blade18::change(change));
         }
-        if (read_sensors || read_capabilities || read_lighting || lighting_change.is_some() || keyboard_static.is_some()) && !self.preview {
+        if save_display_profiles {self.persist();}
+        if (read_sensors || read_capabilities || read_lighting || lighting_change.is_some() || keyboard_static.is_some() || read_display || apply_display.is_some()) && !self.preview {
             let (sender, receiver) = mpsc::channel();
             self.sensor_job = Some(receiver);
-            self.message = if keyboard_static.is_some() {
+            self.message = if apply_display.is_some() {
+                "Applying refresh rate…"
+            } else if read_display {
+                "Reading refresh rates…"
+            } else if keyboard_static.is_some() {
                 "Applying keyboard color…"
             } else if read_lighting || lighting_change.is_some() {
                 "Reading lighting settings…"
@@ -341,13 +370,15 @@ impl BladeApp {
             let repaint = ctx.clone();
             std::thread::spawn(move || {
                 let _ = sender.send(
-                    (if let Some(rgb)=keyboard_static {
+                    (if read_display || apply_display.is_some() {
+                        apply_display.as_ref().map_or_else(librazer::display::inventory,librazer::display::apply).map(|state|serde_json::json!({"display_controls":state}))
+                    } else if let Some((effect,rgb))=keyboard_static {
                         (|| {
                             let folder=std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA").ok_or_else(||anyhow::anyhow!("Settings folder unavailable"))?).join("RHelper").join("lighting-changes");
                             std::fs::create_dir_all(&folder)?;
                             let stamp=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos();
                             let path=folder.join(format!("{}-{stamp}.json",std::process::id()));
-                            blade18::lighting::keyboard_static(rgb,&path).map(|state|serde_json::json!({"lighting_controls":state}))
+                            blade18::lighting::keyboard_effect(effect,rgb,&path).map(|state|serde_json::json!({"lighting_controls":state}))
                         })()
                     } else if read_lighting || lighting_change.is_some() {
                         lighting_change.map_or_else(blade18::lighting::status,blade18::lighting::change)
