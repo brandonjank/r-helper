@@ -36,6 +36,7 @@ struct BladeApp {
     sensor_job: Option<mpsc::Receiver<Result<serde_json::Value, String>>>,
     sensor_report: Option<serde_json::Value>,
     capability_report: Option<serde_json::Value>,
+    lighting: Option<blade18::lighting::Lighting>,
     preview: bool,
     curve_settings: blade18::CurveSettings,
     curve_error: Option<String>,
@@ -97,6 +98,7 @@ impl BladeApp {
             sensor_job: None,
             sensor_report: None,
             capability_report: None,
+            lighting: None,
             preview: false,
             curve_settings,
             curve_error,
@@ -272,7 +274,9 @@ impl BladeApp {
             match receiver.try_recv() {
                 Ok(Ok(report)) => {
                     self.report = serde_json::to_string_pretty(&report).unwrap_or_default();
-                    if report["thermal_capabilities"].is_object() {
+                    if report["lighting_controls"].is_object() {
+                        self.lighting = serde_json::from_value(report["lighting_controls"].clone()).ok();
+                    } else if report["thermal_capabilities"].is_object() {
                         self.capability_report = Some(report);
                     } else {
                         self.sensor_report = Some(report);
@@ -281,11 +285,13 @@ impl BladeApp {
                     self.message = "Controller query complete · exported report available".into();
                 }
                 Ok(Err(error)) => {
+                    self.lighting = None;
                     self.sensor_report = None;
                     self.sensor_job = None;
                     self.message = error;
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
+                    self.lighting = None;
                     self.sensor_job = None;
                     self.sensor_report = None;
                     self.message = "Sensor worker stopped; retry the sensor query".into();

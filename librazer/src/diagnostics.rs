@@ -250,13 +250,37 @@ fn collect_impl(
             // IDs 04/05 are candidates for logo/backlight, not verified physical
             // RGB zones on this model. Preserve bytes without interpreting colors.
             for (name, cmd, args) in [
+                ("chroma_regions", 0x0f80, vec![0; 80]),
+                ("underside_enabled", 0x0380, vec![0, 38, 0]),
+                ("keyboard_effect_ids", 0x0f81, {
+                    let mut a = vec![0; 80];
+                    a[0] = 5;
+                    a
+                }),
+                ("logo_effect_ids", 0x0f81, {
+                    let mut a = vec![0; 80];
+                    a[0] = 4;
+                    a
+                }),
+                ("keyboard_chroma_effect", 0x0f82, {
+                    let mut a = vec![0; 80];
+                    a[..2].copy_from_slice(&[1, 5]);
+                    a
+                }),
+                ("logo_chroma_effect", 0x0f82, {
+                    let mut a = vec![0; 80];
+                    a[..2].copy_from_slice(&[1, 4]);
+                    a
+                }),
+                ("keyboard_chroma_brightness", 0x0f84, vec![1, 5, 0]),
+                ("logo_chroma_brightness", 0x0f84, vec![1, 4, 0]),
                 ("led_04_rgb", 0x0381, vec![1, 4, 0, 0, 0]),
                 ("led_05_rgb", 0x0381, vec![1, 5, 0, 0, 0]),
                 ("led_05_effect", 0x0382, vec![1, 5, 0]),
             ] {
                 let result = command::send_command(&device, cmd, &args).and_then(|response| {
                     ensure!(
-                        response.get_args()[..2] == args[..2],
+                        matches!(cmd, 0x0f80 | 0x0f81) || response.get_args()[..2] == args[..2],
                         "LED response selector mismatch"
                     );
                     Ok(response.get_args()[..args.len()].to_vec())
@@ -270,7 +294,7 @@ fn collect_impl(
                 );
             }
             report["lighting_candidates"] = json!({
-                "source": "https://github.com/openrazer/openrazer/blob/master/driver/razerchromacommon.c",
+                "sources": ["https://github.com/openrazer/openrazer/blob/master/driver/razerchromacommon.c", "https://apps.razer.com/synapse/products/711/mw/rzDevice25.279816c47f47f21a061c.js", "https://apps.razer.com/synapse/products/711/mw/rzDevice25LedMatrixBlade2.170063b45f6854daf8ea.js"],
                 "physical_zone_mapping_verified": false,
                 "getters": candidates,
             });

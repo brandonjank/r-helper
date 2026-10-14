@@ -4,6 +4,13 @@ Research date: 2026-10-14. Target: RZ09-0529 / RZ09-05299ER9,
 Intel Core Ultra 9 275HX, RTX 5090 Laptop GPU, BIOS 2.01.
 This is a capability roadmap, not a promise that another laptop's controls work here.
 
+Latest lighting milestone: startup-animation and independent underside switches
+are implemented and passed toggle/readback/restoration tests, including the app UI.
+The controller advertises keyboard RGB and a single-color logo; region 38 is an
+enable switch, not an advertised independent Chroma RGB region. Current keyboard
+custom-frame pixels cannot be restored from the effect getter, so color writes
+remain blocked. See [lighting evidence and next steps](blade18-lighting.md).
+
 ## Findings on this machine
 
 | Area | Evidence | Remaining work |

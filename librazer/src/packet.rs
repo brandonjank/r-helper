@@ -55,6 +55,9 @@ impl Packet {
         let command = u16::from_be_bytes([self.command_class, self.command_id]);
         let args = &self.args[..usize::from(self.data_size).min(80)];
         let allowed = match command {
+            // Exact model-711 callers: startup uses profile 0; underside uses class 1.
+            0x0f18 => matches!(args, [0, 0 | 1]),
+            0x0300 if matches!(args, [1, 38, 0 | 1]) => true,
             0x0300 => matches!(args, [1, 4, 0 | 1]),
             0x0302 => matches!(args, [1, 4, 0 | 2]),
             0x0712 => matches!(args, [0x50 | 0xd0]),
@@ -92,10 +95,22 @@ impl Packet {
             0x0d8a | 0x0d8b => args == [0, 0],
             0x0d89 => args == [0, 0],
             0x0d8e | 0x0f98 => args == [0],
+            // Model-711 Chroma inventory and underside LED (Blade2 getter uses class 0).
+            0x0f80 => args == [0; 80],
+            0x0f81 => {
+                args.len() == 80 && matches!(args[0], 4 | 5) && args[1..].iter().all(|v| *v == 0)
+            }
+            0x0f82 => {
+                args.len() == 80
+                    && args[0] == 1
+                    && matches!(args[1], 4 | 5)
+                    && args[2..].iter().all(|v| *v == 0)
+            }
+            0x0f84 => matches!(args, [1, 4 | 5, 0]),
             0x0d90 => args == [0, 0, 0],
             0x0d8f => args == [0],
             0x0383 => args == [1, 5, 0],
-            0x0380 => args == [1, 4, 0],
+            0x0380 => args == [1, 4, 0] || args == [0, 38, 0],
             0x0382 => args == [1, 4, 0] || args == [1, 5, 0],
             0x0381 => args == [1, 4, 0, 0, 0] || args == [1, 5, 0, 0, 0],
             0x0084 => args == [0, 0],
@@ -202,6 +217,38 @@ impl TryFrom<&[u8]> for Packet {
 #[cfg(test)]
 mod diagnostic_tests {
     use super::Packet;
+    #[test]
+    fn lighting_switches_cannot_enable_other_profiles_regions_or_effect_writes() {
+        for profile in 0..=2 {
+            for value in 0..=2 {
+                let startup = Packet::new(0x0f18, &[profile, value]);
+                assert_eq!(startup.ensure_blade18_access().is_ok(), profile == 0 && value <= 1);
+                assert!(startup.ensure_diagnostic_query().is_err());
+                let underside = Packet::new(0x0300, &[profile, 38, value]);
+                assert_eq!(underside.ensure_blade18_access().is_ok(), profile == 1 && value <= 1);
+                assert!(underside.ensure_diagnostic_query().is_err());
+            }
+        }
+        for command in [0x0f02, 0x0f03, 0x0f04, 0x0f05, 0x0f06] {
+            assert!(Packet::new(command, &[0; 80]).ensure_blade18_access().is_err());
+        }
+        for region in [0, 1, 3, 4, 5, 6, 38, 255] {
+            let mut args = [0; 80];
+            args[0] = region;
+            assert_eq!(
+                Packet::new(0x0f81, &args).ensure_diagnostic_query().is_ok(),
+                matches!(region, 4 | 5)
+            );
+            args[0] = 1;
+            args[1] = region;
+            assert_eq!(
+                Packet::new(0x0f82, &args).ensure_diagnostic_query().is_ok(),
+                matches!(region, 4 | 5)
+            );
+            args[79] = 1;
+            assert!(Packet::new(0x0f82, &args).ensure_diagnostic_query().is_err());
+        }
+    }
     #[test]
     fn standard_framing_encodes_known_checksums_without_changing_commands() {
         for (command, args, expected) in

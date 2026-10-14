@@ -16,7 +16,9 @@ Synapse feature flag is not proof that this SKU accepts its setter.
 | Controller firmware | Readable; do not equate it with separately unconfirmed EC/PD firmware versions. |
 | Graphics configuration getter `0d89` | Returns `[2,0]`. Generic metadata describes platform/mode fields; graphics-mode writes and restart requirements remain unverified. |
 | Panel-resolution getter `0d8e` | Returns `[0]` after accepting its exact observed one-byte header variant. Panel-mode writes and enum interpretation remain unverified. This is separate from ordinary Windows refresh-rate selection. |
-| Startup-animation getter `0f98` | Returns `[0]`; vendor parser names this field `disableAnimation`. Getter works; setter profile/storage semantics have not been validated. |
+| Startup-animation control | Getter `0f98`, setter `0f18 [0,disabled]`; source-backed profile 0, toggle/readback/restore and native UI passed. Actual boot appearance remains unobserved. |
+| Underside lighting switch | Getter `0380 [0,38,0]`, setter `0300 [1,38,enabled]`; independent toggle/readback/restore and native UI passed. Physical appearance and independent RGB remain open. |
+| Chroma region inventory | Keyboard region 5 is RGB 6×19; logo region 4 is single-color PWM 1×1. Effects and brightness are readable. Current keyboard CustomFrame pixels are not recoverable from the effect getter; color setters remain blocked. See [lighting evidence](blade18-lighting.md). |
 | Logical fan ID 4 | Advertised and readable: actual 0, stored target 3000, Auto. Purpose unknown; no fourth-fan control or physical fan claim. |
 
 The class-0 alternate cooling-mode getter `0d90` returned **NotSupported**. This
@@ -31,7 +33,7 @@ Razer's native helper, Windows or NVIDIA rather than the laptop HID endpoint.
 
 | Lead | What remains before an app control |
 | --- | --- |
-| Underside/vapor-chamber lighting | Model feature `hasVCLed` is enabled. Identify independent LED IDs/matrix regions, effects and restoration. Avoid continuous frame streaming for ordinary effects. |
+| Underside/vapor-chamber colors | Enable switch is verified. Region 38 is absent from the Chroma region list; independent RGB/effects remain unestablished. Avoid continuous frame streaming for ordinary effects. |
 | Fn and status lighting | Model configuration lists gaming mode, microphone mute, function key, speaker mute and touchpad-status indicators. Establish supported getters and overlay semantics. |
 | Lighting on AC/battery, idle and startup | Two brightness modes, lighting task policies and startup-animation control exist in the model stack. Separate host policies from firmware-stored settings. |
 | Battery charging override | `hasBatteryChargingOverrideEnabled` is advertised. Capture exact semantics and native-helper/controller path; do not infer arbitrary charge percentages. |

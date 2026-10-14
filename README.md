@@ -142,6 +142,10 @@ It uses explicit EC proxies and is separate from the app session runtime.
 See [controller capability inventory](docs/razer-controller-capabilities.md) for
 other source-backed controls and their current verification status.
 
+[Lighting controls and evidence](docs/blade18-lighting.md) cover the tested
+startup-animation and independent underside switches, keyboard RGB inventory,
+single-color logo, and remaining Chroma color-control work.
+
 
 ## License
 

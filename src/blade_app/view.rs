@@ -97,6 +97,7 @@ impl BladeApp {
             }}})),
             preview: true,
             capability_report: None,
+            lighting: None,
             curve_settings: blade18::CurveSettings::default(),
             curve_error: None,
             curve_events: None,
@@ -116,6 +117,8 @@ impl BladeApp {
         let mut requested = None;
         let mut read_sensors = false;
         let mut read_capabilities = false;
+        let mut read_lighting = false;
+        let mut lighting_change = None;
         egui::CentralPanel::default().frame(egui::Frame::new().fill(Color32::from_rgb(19,22,27)).inner_margin(18)).show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
@@ -197,7 +200,20 @@ impl BladeApp {
                                 }
                             });
                         });
-                        hint(ui, "Independent RGB colors and underside lighting are under investigation");
+                        if ui.add_enabled(enabled, egui::Button::new("Read lighting controls")).clicked() { read_lighting=true; }
+                        if let Some(lighting)=&self.lighting {
+                            let mut underside=lighting.underside;
+                            let mut startup=lighting.startup_animation;
+                            if ui.add_enabled(enabled,egui::Checkbox::new(&mut underside,"Underside light")).changed() {
+                                lighting_change=Some(blade18::lighting::Change::Underside(underside));
+                            }
+                            if ui.add_enabled(enabled,egui::Checkbox::new(&mut startup,"Startup animation")).changed() {
+                                lighting_change=Some(blade18::lighting::Change::StartupAnimation(startup));
+                            }
+                            hint(ui, "Startup animation takes effect at the next boot");
+                            if lighting.keyboard_effect.get(2)==Some(&8) { hint(ui,"Keyboard colors are currently controlled by Chroma"); }
+                        }
+                        hint(ui, "Logo: single-color light · underside: separate on/off control");
                     });
                     card(ui, "Battery care", |ui| {
                         ui.add_enabled_ui(enabled, |ui| {
@@ -240,7 +256,7 @@ impl BladeApp {
                         if let Some(report)=&self.capability_report {
                             for (key,label) in [("vga_configuration","Graphics mode"),("panel_resolution_mode","Panel mode"),("startup_animation_control","Startup animation"),("fan_cooling_mode_class_0","Alternate cooling mode")] {
                                 let getter=&report["thermal_capabilities"]["getters"][key];
-                                ui.label(format!("{label}: {}",if getter["ok"]==true{"readable · writes unverified"}else if getter["error"].as_str().is_some_and(|error|error.contains("Command not supported")){"not supported on this firmware"}else{"query failed · retry"}));
+                                ui.label(format!("{label}: {}",if getter["ok"]==true{if key=="startup_animation_control"{"switch verified · see Lighting"}else{"readable · writes unverified"}}else if getter["error"].as_str().is_some_and(|error|error.contains("Command not supported")){"not supported on this firmware"}else{"query failed · retry"}));
                             }
                         }
                         hint(ui,"Read-only discovery · no graphics, panel or animation changes");
@@ -287,10 +303,12 @@ impl BladeApp {
         if let Some(change) = requested {
             self.start(ctx, "Apply setting", None, move || blade18::change(change));
         }
-        if (read_sensors || read_capabilities) && !self.preview {
+        if (read_sensors || read_capabilities || read_lighting || lighting_change.is_some()) && !self.preview {
             let (sender, receiver) = mpsc::channel();
             self.sensor_job = Some(receiver);
-            self.message = if read_capabilities {
+            self.message = if read_lighting || lighting_change.is_some() {
+                "Reading lighting settings…"
+            } else if read_capabilities {
                 "Reading controller capabilities…"
             } else {
                 "Reading controller sensor candidates…"
@@ -299,7 +317,10 @@ impl BladeApp {
             let repaint = ctx.clone();
             std::thread::spawn(move || {
                 let _ = sender.send(
-                    (if read_capabilities {
+                    (if read_lighting || lighting_change.is_some() {
+                        lighting_change.map_or_else(blade18::lighting::status,blade18::lighting::change)
+                            .map(|state|serde_json::json!({"lighting_controls":state}))
+                    } else if read_capabilities {
                         librazer::diagnostics::collect_thermal_capabilities()
                     } else {
                         librazer::diagnostics::collect_sensors()

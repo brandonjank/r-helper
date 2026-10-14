@@ -6,6 +6,12 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(version)]
 struct Args {
+    /// Restore only the two switches from a lighting validation recovery file.
+    #[arg(long, conflicts_with_all = ["output", "probe", "probe_interface", "probe_lighting", "probe_sensors", "probe_thermal_capabilities", "validate_lighting_switches", "validate_brightness", "validate_batch", "validate_fans", "validate_fan_zones", "identify_main_fan", "restore_state"])]
+    restore_lighting: Option<PathBuf>,
+    /// Toggle startup/underside switches, verify independent regions, then restore.
+    #[arg(long, requires = "output", conflicts_with_all = ["probe", "probe_interface", "probe_lighting", "probe_sensors", "probe_thermal_capabilities", "validate_brightness", "validate_batch", "validate_fans", "validate_fan_zones", "identify_main_fan", "restore_state"])]
+    validate_lighting_switches: bool,
     /// Save JSON to a new file (will not overwrite an existing report).
     #[arg(long)]
     output: Option<PathBuf>,
@@ -67,6 +73,18 @@ struct Args {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    if let Some(path) = args.restore_lighting {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&librazer::blade18::lighting::restore_record(&path)?)?
+        );
+        return Ok(());
+    }
+    if args.validate_lighting_switches {
+        let report = librazer::blade18::lighting::validate(args.output.as_ref().unwrap())?;
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
     if let Some(zone) = args.identify_main_fan {
         println!(
             "{}",
@@ -161,6 +179,30 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn lighting_validation_requires_a_journal_and_excludes_other_actions() {
+        assert!(Args::try_parse_from(["diag", "--validate-lighting-switches"]).is_err());
+        assert!(Args::try_parse_from([
+            "diag",
+            "--validate-lighting-switches",
+            "--output",
+            "test.json"
+        ])
+        .is_ok());
+        for other in ["--probe", "--probe-lighting", "--validate-fan-zones", "--validate-batch"] {
+            assert!(Args::try_parse_from([
+                "diag",
+                "--validate-lighting-switches",
+                "--output",
+                "test.json",
+                other
+            ])
+            .is_err());
+        }
+        assert!(
+            Args::try_parse_from(["diag", "--restore-lighting", "test.json", "--probe"]).is_err()
+        );
+    }
     #[test]
     fn lab_options_cannot_enable_writes_without_an_explicit_scenario() {
         assert!(Args::try_parse_from(["diag", "--probe-sensors"]).is_ok());
