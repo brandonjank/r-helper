@@ -106,7 +106,7 @@ tests journal original settings and attempt restoration on completion or error.
 ## Verified actuation and remaining mapping
 
 - `post-update-verified-primary-control.json`: 90 seconds per unequal-target case.
-  Requested 4000-4500 settled near 3900/4400 RPM; reversing to 4500/4000 settled
+  Requested 4000/4500 settled near 3900/4400 RPM; reversing to 4500/4000 settled
   near 4400/3900-4000. Each case requires at least three consecutive five-second
   readings within 200 RPM. Actual-RPM verification passed; restoration passed.
 - `post-update-paired-init-third-fan.json`: requested 4000/4000/3500, measured
@@ -133,3 +133,28 @@ tests journal original settings and attempt restoration on completion or error.
 Verification: all 30 workspace tests passed and the Windows debug build succeeded.
 The new UI and original R icon are included. The pure curve planner remains
 separate from hardware; no unattended software fan control is enabled.
+
+## Isolated comparison follow-up
+
+The owner could not reliably distinguish airflow with the tested RPM difference.
+Do not use that observation to assign physical CPU/GPU/battery labels or ask for
+repeated touch/airflow judgments. Physical mapping remains unresolved.
+
+`isolated-zone1-20261014.json` verified a settled three-fan 3000-RPM baseline,
+then changed only selector 1 to 4500. Actual speeds reached 4400/2900/3000;
+convergence passed. All three Auto modes and captured targets 4500/0/0 restored
+without error. This is an independent logical speed test, not a physical map.
+
+Further investigation should use timestamped reference temperatures and separate
+CPU/GPU workloads. Thermal coupling and lingering cooldown mean that temperature
+changes alone cannot conclusively identify a physical fan. Keep neutral fan
+numbers until stronger evidence exists.
+
+A subsequent 20-second two-thread CPU workload stayed in Auto throughout. Across
+18 samples, EC A rose from 57 to a peak of 63 C; EC B stayed at 38-39 C. Each EC B
+sample was within 1 C of the nearest NVIDIA reference (maximum timestamp gap
+1054 ms). Reports: `post-mapping-cpu-response.jsonl` and
+`post-mapping-nvidia-reference.json`. This supports the existing CPU/GPU
+associations, but is not independent CPU die-temperature validation or a GPU
+transient-response test. Fans were still cooling down from the mapping test;
+their speed trends cannot assign physical zones in this workload.
