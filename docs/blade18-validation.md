@@ -147,6 +147,10 @@ Silent battery profiles. Static analysis completed with warnings in legacy code.
   with native Windows power notifications. An explicit 30-second fallback is used
   only if registration fails. Short AC-powered 30-second process samples used
   0.34375 CPU seconds before and 0.0625 after; these are not battery-energy tests.
+- A subsequent hidden-in-tray measurement exposed an eframe busy loop consuming
+  29.3125 CPU seconds in 30.016 seconds. Backporting upstream egui #8398 to the
+  vendored 0.32.2 framework reduced this to 0.015625 CPU seconds in 30.012 seconds
+  (0.052% of one core). This separate fix is essential for tray-idle efficiency.
 - Nineteen automated tests pass, including native notification registration,
   shutdown, packet restrictions and the exact temperature response variant.
   The optimized Windows build and on-demand controller sensor GUI are verified.

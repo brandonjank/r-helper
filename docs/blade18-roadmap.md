@@ -29,6 +29,15 @@ The Blade 18 UI previously requested a redraw every 200 ms, even without changes
 The watcher previously woke every 100 ms to check whether its two-second polling
 interval had expired. Both loops are removed for the normal Windows path.
 
+The subsequent tray-hidden check exposed a separate framework busy loop: 29.3125
+CPU seconds in a 30.016-second sample. The pinned framework now carries a small
+backport of [upstream egui #8398](https://github.com/emilk/egui/pull/8398), which
+removes redraw polling and explicitly sleeps when no timer remains. The patched
+crate and licenses are in `vendor/eframe`; its provenance is recorded in PATCHES.md.
+The corrected tray-hidden sample consumed **0.015625 CPU seconds in 30.012 seconds**,
+about **0.052% of one core**, versus roughly 97.7% of a core before the framework fix.
+This is a process CPU measurement, not a battery-energy measurement.
+
 Power changes now use `PowerSettingRegisterNotification` and a blocking event queue.
 The initial notification establishes a baseline without applying a profile. Duplicate
 events are ignored, queued source changes are coalesced, and shutdown wakes the queue
@@ -52,6 +61,10 @@ benchmark. Compare on-battery discharge rates with/without R-Helper at matched p
 brightness, refresh rate, lighting, workload and GPU state. Repeat long enough to
 separate app overhead from noise. Keep any sensor loop demand-based unless it is
 needed for an explicitly enabled software fan controller.
+
+Repeat process sampling using `./tools/measure-idle.ps1 -Seconds 30 -Label 'hidden'`
+after hiding the app, and again while visible. Optional `-OutputPath` creates a new
+JSON file without overwriting an existing result.
 
 ## Fan and temperature design
 

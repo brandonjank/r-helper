@@ -33,6 +33,7 @@ embed-resource = "3.0.5"
 
 [workspace]
 resolver = "2"
+exclude = ["vendor/eframe"]
 members = [
     ".",          # r-helper (GUI)
     "librazer",   # shared lib
@@ -40,3 +41,7 @@ members = [
 default-members = [
     ".",          # build only the GUI by default (root crate)
 ]
+
+[patch.crates-io]
+# Backport upstream egui #8398 to our existing API version; see vendor/eframe/PATCHES.md.
+eframe = { path = "vendor/eframe" }
