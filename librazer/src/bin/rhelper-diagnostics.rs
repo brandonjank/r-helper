@@ -44,7 +44,7 @@ struct Args {
     /// Read candidate controller temperatures, firmware, and third-fan getters. No writes or scan.
     #[arg(long, conflicts_with_all = ["probe", "probe_interface", "probe_lighting", "validate_brightness", "validate_batch", "validate_fans", "validate_fan_zones", "restore_state"])]
     probe_sensors: bool,
-    /// Read model-specific fan-ID, timing and SKU capability getters from vendor protocol metadata.
+    /// Read model-specific fan/SKU capabilities, charger levels and power flags. No setters.
     #[arg(long, conflicts_with_all = ["probe", "probe_interface", "probe_lighting", "probe_sensors", "validate_brightness", "validate_batch", "validate_fans", "validate_fan_zones", "identify_main_fan", "restore_state"])]
     probe_thermal_capabilities: bool,
     /// Temporarily adjust brightness by 8/255, read back, then restore the original.

@@ -26,6 +26,10 @@ impl Profile {
 pub struct Info {
     pub current: Profile,
     pub rates: Vec<u32>,
+    #[serde(default)]
+    pub color_profile: Option<String>,
+    #[serde(default)]
+    pub associated_color_profiles: Vec<String>,
 }
 
 #[cfg(windows)]
@@ -135,6 +139,50 @@ mod native {
                     && a.Anonymous2.dmDisplayFlags == b.Anonymous2.dmDisplayFlags
             }
     }
+    fn color_profiles(name: PCWSTR) -> (Option<String>, Vec<String>) {
+        use windows::Win32::{Foundation::LPARAM, UI::ColorSystem::*};
+        unsafe extern "system" fn collect(name: PCWSTR, data: LPARAM) -> i32 {
+            let profiles = &mut *(data.0 as *mut Vec<String>);
+            if profiles.len() >= 128 {
+                return 0;
+            }
+            if let Ok(name) = name.to_string() {
+                if let Some(file) = std::path::Path::new(&name).file_name() {
+                    profiles.push(file.to_string_lossy().into_owned());
+                }
+            }
+            1
+        }
+        unsafe {
+            let dc = CreateDCW(PCWSTR::null(), name, PCWSTR::null(), None);
+            if dc.0.is_null() {
+                return (None, vec![]);
+            }
+            let mut buffer = vec![0u16; 32768];
+            let mut size = buffer.len() as u32;
+            let current =
+                if GetICMProfileW(dc, &mut size, Some(windows::core::PWSTR(buffer.as_mut_ptr())))
+                    .as_bool()
+                {
+                    let full = text(&buffer);
+                    std::path::Path::new(&full)
+                        .file_name()
+                        .map(|p| p.to_string_lossy().into_owned())
+                } else {
+                    None
+                };
+            let mut profiles = vec![];
+            EnumICMProfilesW(
+                dc,
+                Some(collect),
+                Some(LPARAM((&mut profiles as *mut Vec<String>) as isize)),
+            );
+            let _ = DeleteDC(dc);
+            profiles.sort();
+            profiles.dedup();
+            (current, profiles)
+        }
+    }
     pub fn inventory() -> Result<Info> {
         let (panel, name) = panel()?;
         let name = PCWSTR(name.as_ptr());
@@ -168,7 +216,8 @@ mod native {
             rates.contains(&current.hz),
             "Current rate is not in the supported same-resolution list"
         );
-        Ok(Info { current, rates })
+        let (color_profile, associated_color_profiles) = color_profiles(name);
+        Ok(Info { current, rates, color_profile, associated_color_profiles })
     }
     pub fn apply(profile: &Profile) -> Result<Info> {
         profile.validate()?;

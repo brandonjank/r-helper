@@ -5,6 +5,11 @@ based on [Fatalution/r-helper](https://github.com/Fatalution/r-helper).
 
 ## Blade 18 (2025)
 
+Version 0.5.0 adds firmware keyboard effects and experimental per-key colors,
+AC/battery lighting presets and power policies, named application profiles,
+charge-once request/cancel, and guarded display changes with color-profile information.
+See [the feature batch and validation limits](docs/blade18-feature-batch.md).
+
 The `RZ09-0529` / USB `1532:02c7` opens a model-specific control screen with:
 
 - Keyboard brightness, logo Off/Static/Breathing, and battery-care toggle.

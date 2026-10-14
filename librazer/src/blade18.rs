@@ -17,11 +17,14 @@ pub const FAN_MIN: u16 = 4000;
 pub const FAN_MAX: u16 = 4500;
 pub const MANUAL_FANS_VERIFIED: bool = true;
 
+pub mod charge;
 mod curve_lab;
 pub mod lighting;
 pub use curve_lab::{test_curves, CurveFault};
 mod curve_session;
-pub use curve_session::{run_curve_session, restore_curve_session, CurveSettings, CurveSource, ZoneCurve, CurvePoint};
+pub use curve_session::{
+    restore_curve_session, run_curve_session, CurvePoint, CurveSettings, CurveSource, ZoneCurve,
+};
 
 pub fn ac_connected() -> Result<bool> {
     #[cfg(windows)]

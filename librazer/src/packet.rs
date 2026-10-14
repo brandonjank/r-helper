@@ -58,12 +58,23 @@ impl Packet {
             // Exact model-711 callers: startup uses profile 0; underside uses class 1.
             0x0f18 => matches!(args, [0, 0 | 1]),
             // Bounded firmware static keyboard RGB, profile 1 / region 5 only.
-            0x0f02 => matches!(args, [1, 5, 1 | 2, 0, 1, 1, _, _, _]),
+            0x0f02 => matches!(
+                args,
+                [1, 5, 1 | 2, 0, 1, 1, _, _, _]
+                    | [1, 5, 2, 0, 1, 2, _, _, _, _, _, _]
+                    | [1, 5, 4, 1 | 2, 40, 0]
+                    | [1, 5, 5, 0, 2, 1, _, _, _]
+                    | [1, 5, 8, 0, 0, 0]
+            ),
+            0x0f03 => {
+                args.len() == 62 && args[0..2] == [0, 5] && args[2] < 6 && args[3..5] == [0, 18]
+            }
             0x0300 if matches!(args, [1, 38, 0 | 1]) => true,
             0x0303 => matches!(args, [1, 38, _]),
             0x0300 => matches!(args, [1, 4, 0 | 1]),
             0x0302 => matches!(args, [1, 4, 0 | 2]),
             0x0712 => matches!(args, [0x50 | 0xd0]),
+            0x070f => matches!(args, [8 | 12]),
             0x0d02 => {
                 matches!(args, [1, 1 | 2, 0 | 2 | 4 | 5 | 6 | 7, 0 | 1] | [0, 1 | 2, 0, 0 | 1])
             }
@@ -120,6 +131,8 @@ impl Packet {
             }
             0x0084 => args == [0, 0],
             0x0792 | 0x078f => args == [0],
+            0x078c => args == [0, 0],
+            0x0d8d => matches!(args, [0, 1..=3, 0]),
             // Selector 4 is included only as a getter after the device's ID list
             // explicitly advertised it. No fourth-selector setters are allowed.
             0x0d82 => matches!(args, [0, 1..=4, 0, 0]),
@@ -181,6 +194,9 @@ impl Packet {
             // this does not authorize queries to any extra fan selectors.
             || (report.remaining_packets == 0 && report.data_size == self.data_size
                 && match (self.command_class, self.command_id, self.data_size, self.remaining_packets) {
+                    // Observed adapter-level reply uses the returned-byte count
+                    // in this header. Accept only the documented wattage enums.
+                    (0x07, 0x8c, 2, 0x0200) => self.args[..2].iter().all(|v| matches!(*v, 0..=15 | 17..=19 | 255)),
                     (0x0d, 0x80, 80, 0x0500) => self.args[..5] == [4, 1, 2, 3, 4],
                     (0x0d, 0x83, 12, 0x0c00) => self.args[0] == 0,
                     (0x0d, 0x8f, 1, 0x0100) => self.args[0] == 1,
@@ -222,6 +238,92 @@ impl TryFrom<&[u8]> for Packet {
 #[cfg(test)]
 mod diagnostic_tests {
     use super::Packet;
+    #[test]
+    fn feature_batch_writes_are_bounded_to_keyboard_and_charge_bit_patterns() {
+        for flags in 0..=255 {
+            assert_eq!(
+                Packet::new(0x070f, &[flags]).ensure_blade18_access().is_ok(),
+                matches!(flags, 8 | 12)
+            );
+            assert!(Packet::new(0x070f, &[flags]).ensure_diagnostic_query().is_err());
+        }
+        let mut frame = vec![0; 62];
+        frame[..5].copy_from_slice(&[0, 5, 0, 0, 18]);
+        for row in 0..=255 {
+            frame[2] = row;
+            assert_eq!(Packet::new(0x0f03, &frame).ensure_blade18_access().is_ok(), row < 6);
+        }
+        frame[2] = 0;
+        for field in [0, 1, 3, 4] {
+            let old = frame[field];
+            for value in 0..=255 {
+                frame[field] = value;
+                assert_eq!(
+                    Packet::new(0x0f03, &frame).ensure_blade18_access().is_ok(),
+                    value == old
+                );
+            }
+            frame[field] = old;
+        }
+        assert!(Packet::new(0x0f03, &frame[..61]).ensure_blade18_access().is_err());
+        for args in [
+            vec![1, 4, 8, 0, 0, 0],
+            vec![1, 5, 4, 3, 40, 0],
+            vec![1, 5, 5, 0, 255, 1, 0, 0, 0],
+            vec![1, 5, 3, 0, 0, 0],
+        ] {
+            assert!(Packet::new(0x0f02, &args).ensure_blade18_access().is_err());
+        }
+    }
+    #[test]
+    fn charger_discovery_only_accepts_the_exact_getter() {
+        assert!(Packet::new(0x078c, &[0, 0]).ensure_diagnostic_query().is_ok());
+        for args in [vec![], vec![0], vec![1, 0], vec![0, 1], vec![0, 0, 0]] {
+            assert!(Packet::new(0x078c, &args).ensure_diagnostic_query().is_err());
+        }
+        for command in [0x070c, 0x070f] {
+            assert!(Packet::new(command, &[0, 0]).ensure_diagnostic_query().is_err());
+            assert!(Packet::new(command, &[4]).ensure_blade18_access().is_err());
+        }
+    }
+    #[test]
+    fn duty_cycle_discovery_cannot_set_pwm_or_scan_new_selectors() {
+        for selector in 0..=255 {
+            assert_eq!(
+                Packet::new(0x0d8d, &[0, selector, 0]).ensure_diagnostic_query().is_ok(),
+                (1..=3).contains(&selector)
+            );
+            assert!(Packet::new(0x0d0d, &[0, selector, 50]).ensure_blade18_access().is_err());
+        }
+        for args in [vec![0, 1], vec![1, 1, 0], vec![0, 1, 1], vec![0, 1, 0, 0]] {
+            assert!(Packet::new(0x0d8d, &args).ensure_diagnostic_query().is_err());
+        }
+    }
+    #[test]
+    fn charger_response_header_exception_is_scoped_to_documented_levels() {
+        let request = Packet::new(0x078c, &[0, 0]);
+        let mut reply = Packet::new(0x078c, &[19, 19]);
+        reply.id = request.id;
+        reply.status = 2;
+        reply.remaining_packets = 0x0200;
+        assert!(reply.ensure_matches_report(&request).is_ok());
+        for value in 0..=255 {
+            reply.args[0] = value;
+            assert_eq!(
+                reply.ensure_matches_report(&request).is_ok(),
+                matches!(value, 0..=15 | 17..=19 | 255)
+            );
+        }
+        reply.args[0] = 19;
+        reply.remaining_packets = 0x0300;
+        assert!(reply.ensure_matches_report(&request).is_err());
+        reply.remaining_packets = 0x0200;
+        reply.data_size = 3;
+        assert!(reply.ensure_matches_report(&request).is_err());
+        reply.data_size = 2;
+        reply.command_id = 0x8e;
+        assert!(reply.ensure_matches_report(&request).is_err());
+    }
     #[test]
     fn static_keyboard_setter_cannot_write_other_regions_effects_or_frames() {
         let valid = [1, 5, 1, 0, 1, 1, 32, 64, 255];

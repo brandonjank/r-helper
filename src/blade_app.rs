@@ -8,6 +8,7 @@ use librazer::{
     types::*,
 };
 use std::{path::PathBuf, sync::mpsc};
+mod batch;
 mod curves;
 mod view;
 
@@ -17,6 +18,7 @@ struct Job {
     label: String,
 }
 struct BladeApp {
+    batch: batch::BatchUi,
     state: Option<State>,
     job: Option<Job>,
     message: String,
@@ -37,7 +39,7 @@ struct BladeApp {
     sensor_report: Option<serde_json::Value>,
     capability_report: Option<serde_json::Value>,
     lighting: Option<blade18::lighting::Lighting>,
-    keyboard_color: [u8;3],
+    keyboard_color: [u8; 3],
     underside_brightness: u8,
     keyboard_effect: blade18::lighting::KeyboardEffect,
     display: Option<librazer::display::Info>,
@@ -83,6 +85,7 @@ impl BladeApp {
             curve_control.clone(),
         );
         let mut app = Self {
+            batch: batch::BatchUi::default(),
             state: None,
             job: None,
             message: String::new(),
@@ -103,7 +106,7 @@ impl BladeApp {
             sensor_report: None,
             capability_report: None,
             lighting: None,
-            keyboard_color: [32,64,255],
+            keyboard_color: [32, 64, 255],
             underside_brightness: 64,
             keyboard_effect: blade18::lighting::KeyboardEffect::Static,
             display: None,
@@ -114,6 +117,13 @@ impl BladeApp {
             curve_status: None,
             curve_control,
         };
+        let (watcher, updates) = crate::blade_policy::Watcher::new(
+            app.shared_settings.clone(),
+            ctx.clone(),
+            app.curve_control.clone(),
+        );
+        app.batch.watcher = Some(watcher);
+        app.batch.updates = Some(updates);
         app.start(ctx, "Read device state", None, blade18::status);
         app
     }
@@ -134,12 +144,30 @@ impl BladeApp {
         let (sender, receiver) = mpsc::channel();
         self.job = Some(Job { receiver, save_as, label: label.into() });
         self.message = format!("{label}…");
+        if label.starts_with("Apply") || label.starts_with("Cycle") {
+            self.display = None;
+            self.lighting = None;
+        }
         let repaint = ctx.clone();
         let curves = self.curve_control.clone();
+        let policy = self.batch.watcher.as_ref().map(|w| w.sender());
+        let manual = label.starts_with("Apply") || label.starts_with("Cycle");
         std::thread::spawn(move || {
             let _ = sender.send(
                 crate::blade_curves::stop_and_wait(&curves)
-                    .and_then(|_| operation())
+                    .and_then(|_| crate::blade_profiles::operation_lock())
+                    .and_then(|_lock| {
+                        crate::blade_curves::stop_and_wait(&curves)?;
+                        let result = operation()?;
+                        if manual {
+                            if let (Some(sender), Ok(snapshot)) =
+                                (policy, blade_profiles::Named::capture("Manual settings".into()))
+                            {
+                                let _ = sender.send(crate::blade_power::Event::Baseline(snapshot));
+                            }
+                        }
+                        Ok(result)
+                    })
                     .map_err(|error| format!("{error:#}")),
             );
             repaint.request_repaint();
@@ -163,6 +191,9 @@ impl BladeApp {
                 if let Ok(mut shared) = self.shared_settings.lock() {
                     *shared = self.settings.clone();
                 }
+                if let Some(watcher) = &self.batch.watcher {
+                    watcher.wake();
+                }
                 "Profiles saved".into()
             }
             Err(error) => {
@@ -174,15 +205,30 @@ impl BladeApp {
         };
     }
     fn apply_saved(&mut self, ctx: &egui::Context, ac: bool) {
-        self.display=None;
+        self.display = None;
         let profile = if ac { self.settings.ac.clone() } else { self.settings.battery.clone() };
-        let display = if ac { self.settings.display_ac.clone() } else { self.settings.display_battery.clone() };
+        let display = if ac {
+            self.settings.display_ac.clone()
+        } else {
+            self.settings.display_battery.clone()
+        };
+        let lighting = if ac {
+            self.settings.lighting_ac.clone()
+        } else {
+            self.settings.lighting_battery.clone()
+        };
         if let Some(profile) = profile {
             self.start(
                 ctx,
                 if ac { "Apply AC profile" } else { "Apply battery profile" },
                 None,
-                move || blade_profiles::apply(&profile,display.as_ref()),
+                move || {
+                    let state = blade_profiles::apply(&profile, display.as_ref())?;
+                    if let Some(p) = lighting {
+                        p.apply(&blade_profiles::journal_path("manual-power-lighting")?)?;
+                    }
+                    Ok(state)
+                },
             );
         } else {
             self.message = "Save that profile first".into();
@@ -260,6 +306,9 @@ impl BladeApp {
             }
         }
         if let Some(result) = curve_finished {
+            if let Some(watcher) = &self.batch.watcher {
+                watcher.wake();
+            }
             self.curve_events = None;
             self.message = if result["recovery_verified"] == true {
                 format!(
@@ -284,17 +333,76 @@ impl BladeApp {
             match receiver.try_recv() {
                 Ok(Ok(report)) => {
                     self.report = serde_json::to_string_pretty(&report).unwrap_or_default();
+                    if report["device_state"].is_object() {
+                        self.state = serde_json::from_value(report["device_state"].clone()).ok();
+                    }
                     if report["lighting_controls"].is_object() {
-                        self.lighting = serde_json::from_value(report["lighting_controls"].clone()).ok();
-                        if let Some(lighting)=&self.lighting { self.underside_brightness=lighting.underside_brightness; }
-                        if let Some(id)=self.lighting.as_ref().and_then(|s|s.keyboard_effect.get(2)) {
-                            self.keyboard_effect=match id {2=>blade18::lighting::KeyboardEffect::Breathing,3=>blade18::lighting::KeyboardEffect::Spectrum,_=>blade18::lighting::KeyboardEffect::Static};
+                        self.lighting =
+                            serde_json::from_value(report["lighting_controls"].clone()).ok();
+                        if let Some(lighting) = &self.lighting {
+                            self.underside_brightness = lighting.underside_brightness;
                         }
-                        if let Some(effect)=self.lighting.as_ref().map(|v| &v.keyboard_effect) {
-                            if effect.len()==9 && matches!(effect[2],1|2) { self.keyboard_color.copy_from_slice(&effect[6..9]); }
+                        if let Some(lighting) = &self.lighting {
+                            if let Ok(preset) = blade18::lighting::Preset::capture(
+                                lighting,
+                                self.state.as_ref().map(|s| s.logo).unwrap_or(LogoMode::Static),
+                            ) {
+                                self.batch.draft = preset;
+                            }
+                        }
+                        if let Some(id) =
+                            self.lighting.as_ref().and_then(|s| s.keyboard_effect.get(2))
+                        {
+                            self.keyboard_effect = match id {
+                                2 => blade18::lighting::KeyboardEffect::Breathing,
+                                3 => blade18::lighting::KeyboardEffect::Spectrum,
+                                _ => blade18::lighting::KeyboardEffect::Static,
+                            };
+                        }
+                        if let Some(effect) = self.lighting.as_ref().map(|v| &v.keyboard_effect) {
+                            if effect.len() == 9 && matches!(effect[2], 1 | 2) {
+                                self.keyboard_color.copy_from_slice(&effect[6..9]);
+                            }
                         }
                     } else if report["display_controls"].is_object() {
-                        self.display=serde_json::from_value(report["display_controls"].clone()).ok();
+                        self.display =
+                            serde_json::from_value(report["display_controls"].clone()).ok();
+                        if let Some(path) = report["display_pending"].as_str() {
+                            self.batch.pending =
+                                Some((PathBuf::from(path), std::time::Instant::now()));
+                        }
+                    } else if report["named_update"].is_object() {
+                        let updated = (|| -> anyhow::Result<()> {
+                            let index = report["named_update"]["index"]
+                                .as_u64()
+                                .ok_or_else(|| anyhow::anyhow!("Invalid profile index"))?
+                                as usize;
+                            let p: blade_profiles::Named =
+                                serde_json::from_value(report["named_update"]["profile"].clone())?;
+                            p.validate()?;
+                            anyhow::ensure!(
+                                index < self.settings.named.len(),
+                                "Profile no longer exists"
+                            );
+                            self.settings.named[index] = p;
+                            Ok(())
+                        })();
+                        match updated {
+                            Ok(()) => self.persist(),
+                            Err(e) => self.message = format!("Profile update failed: {e:#}"),
+                        }
+                    } else if report["named_capture"].is_object() {
+                        match serde_json::from_value::<blade_profiles::Named>(
+                            report["named_capture"].clone(),
+                        ) {
+                            Ok(profile) => {
+                                self.settings.named.push(profile);
+                                self.persist();
+                            }
+                            Err(e) => self.message = format!("Profile capture failed: {e}"),
+                        }
+                    } else if let Some(active) = report["charge_once"].as_bool() {
+                        self.batch.charge = Some(active);
                     } else if report["thermal_capabilities"].is_object() {
                         self.capability_report = Some(report);
                     } else {
@@ -304,7 +412,7 @@ impl BladeApp {
                     self.message = "Controller query complete · exported report available".into();
                 }
                 Ok(Err(error)) => {
-                    self.display=None;
+                    self.display = None;
                     self.lighting = None;
                     self.sensor_report = None;
                     self.sensor_job = None;
@@ -363,6 +471,7 @@ impl BladeApp {
 impl eframe::App for BladeApp {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         self.complete();
+        self.batch_updates(ctx);
         if let Some(desktop) = &self.desktop {
             let events = desktop.events();
             for action in events {
@@ -370,7 +479,9 @@ impl eframe::App for BladeApp {
             }
         }
         while let Ok(update) = self.power_updates.try_recv() {
-            if update.ac!=self.last_power {self.display=None;}
+            if update.ac != self.last_power {
+                self.display = None;
+            }
             self.last_power = update.ac;
             if let Some(error) = update.monitor_error {
                 self.power_error = Some(error);
@@ -413,10 +524,16 @@ impl eframe::App for BladeApp {
         if self.preview {
             return;
         }
+        if let Some((path, _)) = self.batch.pending.take() {
+            let _ = crate::blade_display::finish(&path, false);
+        }
         if let Some(watcher) = &mut self.power_watcher {
             watcher.stop();
         }
         let _ = crate::blade_curves::stop_and_wait(&self.curve_control);
+        if let Some(watcher) = &mut self.batch.watcher {
+            watcher.stop();
+        }
         if self.state.as_ref().is_some_and(|state| state.fan_mode == FanMode::Manual) {
             let _ = blade18::change(Change::AutoFans);
         }

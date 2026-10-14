@@ -80,6 +80,7 @@ pub fn launch(
     active: Shared,
     ctx: eframe::egui::Context,
 ) -> Result<mpsc::Receiver<Value>> {
+    let _operation = crate::blade_profiles::try_operation_lock()?;
     config.validate()?;
     ensure!(
         active.lock().map_err(|_| anyhow::anyhow!("Curve session lock failed"))?.is_none(),

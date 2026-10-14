@@ -21,7 +21,7 @@ pub(super) fn configure(ctx: &egui::Context) {
     });
 }
 
-fn card(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui)) {
+pub(super) fn card(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::new().fill(SURFACE).corner_radius(10).inner_margin(14).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.label(RichText::new(title).strong().size(14.0));
@@ -74,6 +74,7 @@ impl BladeApp {
         let settings = Settings { ac: Some(Profile::capture(&state)), ..Settings::default() };
         let (_, power_updates) = mpsc::channel();
         Self {
+            batch: super::batch::BatchUi::default(),
             state: Some(state),
             job: None,
             message: "UI preview · sample data · hardware controls disabled".into(),
@@ -98,7 +99,7 @@ impl BladeApp {
             preview: true,
             capability_report: None,
             lighting: None,
-            keyboard_color: [32,64,255],
+            keyboard_color: [32, 64, 255],
             underside_brightness: 64,
             keyboard_effect: blade18::lighting::KeyboardEffect::Static,
             display: None,
@@ -111,7 +112,8 @@ impl BladeApp {
     }
 
     pub(super) fn render(&mut self, ctx: &egui::Context, idle: bool) {
-        let enabled = idle && !self.preview && self.curve_events.is_none();
+        let enabled =
+            idle && !self.preview && self.curve_events.is_none() && self.batch.pending.is_none();
         let footer_height = 105.0
             + 20.0
                 * [&self.desktop_error, &self.power_error, &self.settings_error]
@@ -123,10 +125,10 @@ impl BladeApp {
         let mut read_capabilities = false;
         let mut read_lighting = false;
         let mut lighting_change = None;
-        let mut keyboard_static = None;
-        let mut read_display=false;
-        let mut apply_display=None;
-        let mut save_display_profiles=false;
+
+        let mut read_display = false;
+        let mut apply_display = None;
+        let mut save_display_profiles = false;
         egui::CentralPanel::default().frame(egui::Frame::new().fill(Color32::from_rgb(19,22,27)).inner_margin(18)).show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
@@ -210,20 +212,8 @@ impl BladeApp {
                         });
                         if ui.add_enabled(enabled, egui::Button::new("Read lighting controls")).clicked() { read_lighting=true; }
                         if let Some(lighting)=&self.lighting {
-                            ui.add_enabled_ui(enabled, |ui| {
-                                ui.horizontal(|ui| {
-                                    egui::ComboBox::from_id_salt("keyboard_effect").selected_text(format!("{:?}",self.keyboard_effect)).show_ui(ui,|ui|{
-                                        for effect in [blade18::lighting::KeyboardEffect::Static,blade18::lighting::KeyboardEffect::Breathing] {ui.selectable_value(&mut self.keyboard_effect,effect,format!("{effect:?}"));}
-                                    });
-                                    ui.color_edit_button_srgb(&mut self.keyboard_color);
-                                    ui.monospace(format!("#{:02X}{:02X}{:02X}",self.keyboard_color[0],self.keyboard_color[1],self.keyboard_color[2]));
-                                    if ui.button("Apply effect").clicked() { keyboard_static=Some((self.keyboard_effect,self.keyboard_color)); }
-                                });
-                            });
-                            hint(ui,"Apply replaces the current keyboard effect.");
-                            hint(ui,"Reapply a Synapse preset to return to Chroma.");
-                            hint(ui,"Spectrum is advertised but did not apply on this firmware.");
-                            let mut underside=lighting.underside;
+                            hint(ui,"Keyboard effects and per-key colors are below.");
+let mut underside=lighting.underside;
                             let mut startup=lighting.startup_animation;
                             if ui.add_enabled(enabled,egui::Checkbox::new(&mut underside,"Underside light")).changed() {
                                 lighting_change=Some(blade18::lighting::Change::Underside(underside));
@@ -241,7 +231,7 @@ impl BladeApp {
                                 lighting_change=Some(blade18::lighting::Change::StartupAnimation(startup));
                             }
                             hint(ui, "Startup animation takes effect at the next boot");
-                            if lighting.keyboard_effect.get(2)==Some(&8) { hint(ui,"Keyboard colors are currently controlled by Chroma"); }
+                            if lighting.keyboard_effect.get(2)==Some(&8) { hint(ui,"Per-key mode · pixels are not readable from the controller"); }
                         }
                         hint(ui, "Logo: single-color light · underside: separate on/off control");
                     });
@@ -263,6 +253,7 @@ impl BladeApp {
                     });
                 }
                 self.curve_editor(ui,ctx,idle);
+                self.batch_controls(ui,ctx,enabled);
                 // Profile actions require mutable app access after the state borrow ends.
                 card(ui, "Power profiles", |ui| {
                     for ac in [true, false] {
@@ -295,6 +286,10 @@ impl BladeApp {
                         if ui.add_enabled(enabled,egui::Button::new("Read refresh rates")).clicked(){read_display=true;}
                         if let Some(info)=self.display.clone() {
                             ui.label(format!("Internal panel · {} × {} · {} Hz",info.current.width,info.current.height,info.current.hz));
+                            ui.label(format!("Current color profile: {}",info.color_profile.as_deref().unwrap_or("Unavailable")));
+                            if !info.associated_color_profiles.is_empty(){ui.small(format!("Associated profiles: {}",info.associated_color_profiles.join(", ")));}
+                            if ui.button("Windows color management").clicked(){let _=std::process::Command::new("colorcpl.exe").spawn();}
+                            ui.small("Manual refresh changes require Keep; otherwise the previous rate returns. Panel identity and available modes are checked again after docking or resume.");
                             ui.horizontal(|ui|{for hz in &info.rates {if ui.add_enabled(enabled,egui::Button::new(format!("{hz} Hz"))).clicked(){let mut p=info.current.clone();p.hz=*hz;apply_display=Some(p);}}});
                             for ac in [true,false] {
                                 let target=if ac {&mut self.settings.display_ac}else{&mut self.settings.display_battery};
@@ -349,16 +344,23 @@ impl BladeApp {
         if let Some(change) = requested {
             self.start(ctx, "Apply setting", None, move || blade18::change(change));
         }
-        if save_display_profiles {self.persist();}
-        if (read_sensors || read_capabilities || read_lighting || lighting_change.is_some() || keyboard_static.is_some() || read_display || apply_display.is_some()) && !self.preview {
+        if save_display_profiles {
+            self.persist();
+        }
+        if (read_sensors
+            || read_capabilities
+            || read_lighting
+            || lighting_change.is_some()
+            || read_display
+            || apply_display.is_some())
+            && !self.preview
+        {
             let (sender, receiver) = mpsc::channel();
             self.sensor_job = Some(receiver);
             self.message = if apply_display.is_some() {
                 "Applying refresh rate…"
             } else if read_display {
                 "Reading refresh rates…"
-            } else if keyboard_static.is_some() {
-                "Applying keyboard color…"
             } else if read_lighting || lighting_change.is_some() {
                 "Reading lighting settings…"
             } else if read_capabilities {
@@ -370,24 +372,26 @@ impl BladeApp {
             let repaint = ctx.clone();
             std::thread::spawn(move || {
                 let _ = sender.send(
-                    (if read_display || apply_display.is_some() {
-                        apply_display.as_ref().map_or_else(librazer::display::inventory,librazer::display::apply).map(|state|serde_json::json!({"display_controls":state}))
-                    } else if let Some((effect,rgb))=keyboard_static {
-                        (|| {
-                            let folder=std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA").ok_or_else(||anyhow::anyhow!("Settings folder unavailable"))?).join("RHelper").join("lighting-changes");
-                            std::fs::create_dir_all(&folder)?;
-                            let stamp=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos();
-                            let path=folder.join(format!("{}-{stamp}.json",std::process::id()));
-                            blade18::lighting::keyboard_effect(effect,rgb,&path).map(|state|serde_json::json!({"lighting_controls":state}))
-                        })()
-                    } else if read_lighting || lighting_change.is_some() {
-                        lighting_change.map_or_else(blade18::lighting::status,blade18::lighting::change)
-                            .map(|state|serde_json::json!({"lighting_controls":state}))
-                    } else if read_capabilities {
-                        librazer::diagnostics::collect_thermal_capabilities()
-                    } else {
-                        librazer::diagnostics::collect_sensors()
-                    })
+                    (|| {
+                        let _lock = blade_profiles::operation_lock()?;
+                        if read_display || apply_display.is_some() {
+                            apply_display.as_ref().map_or_else(
+                                || {
+                                    librazer::display::inventory()
+                                        .map(|state| serde_json::json!({"display_controls":state}))
+                                },
+                                crate::blade_display::begin,
+                            )
+                        } else if read_lighting || lighting_change.is_some() {
+                            lighting_change
+                                .map_or_else(blade18::lighting::status, blade18::lighting::change)
+                                .map(|state| serde_json::json!({"lighting_controls":state}))
+                        } else if read_capabilities {
+                            librazer::diagnostics::collect_thermal_capabilities()
+                        } else {
+                            librazer::diagnostics::collect_sensors()
+                        }
+                    })()
                     .map_err(|error| format!("{error:#}")),
                 );
                 repaint.request_repaint();

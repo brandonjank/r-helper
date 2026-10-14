@@ -4,6 +4,8 @@ use crate::device::Device;
 use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{fs::File, path::Path, thread, time::Duration};
+mod preset;
+pub use preset::{Preset, Style};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Lighting {

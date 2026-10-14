@@ -8,9 +8,14 @@ pub struct Update {
     pub result: Option<Result<State, String>>,
     pub monitor_error: Option<String>,
 }
-enum Event {
+pub(crate) enum Event {
     Power(Option<bool>),
     Stop,
+    Wake,
+    Display(bool),
+    Baseline(crate::blade_profiles::Named),
+    Resume,
+    Tick,
 }
 pub struct Watcher {
     events: mpsc::Sender<Event>,
@@ -59,6 +64,7 @@ impl Watcher {
                     match event {
                         Event::Power(source) => current = source,
                         Event::Stop => return,
+                        _ => {}
                     }
                 }
                 if current == previous {
@@ -75,11 +81,34 @@ impl Watcher {
                 };
                 let result = blade_profiles::transition(previous, current, saved.automatic)
                     .and_then(|ac| {
-                        let profile = if ac { saved.ac } else { saved.battery };
-                        let display = if ac { saved.display_ac } else { saved.display_battery };
+                        let profile = if ac { saved.ac.clone() } else { saved.battery.clone() };
+                        let display = if ac {
+                            saved.display_ac.clone()
+                        } else {
+                            saved.display_battery.clone()
+                        };
                         profile.map(|profile| {
                             stopped
-                                .and_then(|_| blade_profiles::apply(&profile,display.as_ref()))
+                                .and_then(|_| {
+                                    crate::blade_display::wait_for_confirmation()?;
+                                    let _lock = blade_profiles::operation_lock()?;
+                                    crate::blade_curves::stop_and_wait(&curves)?;
+                                    if let Some(named) = crate::blade_policy::matched(&saved, ac) {
+                                        return named.apply();
+                                    }
+                                    let state = blade_profiles::apply(&profile, display.as_ref())?;
+                                    let lighting = if ac {
+                                        &saved.lighting_ac
+                                    } else {
+                                        &saved.lighting_battery
+                                    };
+                                    if let Some(lighting) = lighting {
+                                        lighting.apply(&blade_profiles::journal_path(
+                                            "power-lighting",
+                                        )?)?;
+                                    }
+                                    Ok(state)
+                                })
                                 .map_err(|error| format!("{error:#}"))
                         })
                     });
@@ -106,17 +135,33 @@ impl Drop for Watcher {
 }
 
 #[cfg(windows)]
-struct Notification {
+pub(crate) struct Notification {
     handle: windows::Win32::System::Power::HPOWERNOTIFY,
     context: Option<Box<mpsc::Sender<Event>>>,
     _parameters: Option<Box<windows::Win32::System::Power::DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS>>,
+    suspend_resume: bool,
 }
 #[cfg(windows)]
 const AC_SOURCE: windows::core::GUID =
     windows::core::GUID::from_u128(0x5d3e9a59_e9d5_4b00_a6bd_ff34ff516548);
 #[cfg(windows)]
+const DISPLAY_STATE: windows::core::GUID =
+    windows::core::GUID::from_u128(0x6fe69556_704a_47a0_8f24_c28d936fda47);
+#[cfg(windows)]
 impl Notification {
-    fn new(sender: mpsc::Sender<Event>) -> anyhow::Result<Self> {
+    pub(crate) fn new(sender: mpsc::Sender<Event>) -> anyhow::Result<Self> {
+        Self::subscribe(sender, Some(AC_SOURCE))
+    }
+    pub(crate) fn display(sender: mpsc::Sender<Event>) -> anyhow::Result<Self> {
+        Self::subscribe(sender, Some(DISPLAY_STATE))
+    }
+    pub(crate) fn resume(sender: mpsc::Sender<Event>) -> anyhow::Result<Self> {
+        Self::subscribe(sender, None)
+    }
+    fn subscribe(
+        sender: mpsc::Sender<Event>,
+        guid: Option<windows::core::GUID>,
+    ) -> anyhow::Result<Self> {
         use windows::Win32::{
             Foundation::HANDLE,
             System::Power::{
@@ -131,20 +176,35 @@ impl Notification {
         });
         let mut handle = std::ptr::null_mut();
         unsafe {
-            PowerSettingRegisterNotification(
-                &AC_SOURCE,
-                DEVICE_NOTIFY_CALLBACK,
-                HANDLE(
-                    (&*parameters as *const DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS).cast_mut().cast(),
-                ),
-                &mut handle,
-            )
-            .ok()?;
+            let recipient = HANDLE(
+                (&*parameters as *const DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS).cast_mut().cast(),
+            );
+            if let Some(guid) = guid {
+                PowerSettingRegisterNotification(
+                    &guid,
+                    DEVICE_NOTIFY_CALLBACK,
+                    HANDLE(
+                        (&*parameters as *const DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS)
+                            .cast_mut()
+                            .cast(),
+                    ),
+                    &mut handle,
+                )
+                .ok()?;
+            } else {
+                windows::Win32::System::Power::PowerRegisterSuspendResumeNotification(
+                    DEVICE_NOTIFY_CALLBACK,
+                    recipient,
+                    &mut handle,
+                )
+                .ok()?;
+            }
         }
         Ok(Self {
             handle: HPOWERNOTIFY(handle as isize),
             context: Some(context),
             _parameters: Some(parameters),
+            suspend_resume: guid.is_none(),
         })
     }
 }
@@ -152,7 +212,11 @@ impl Notification {
 impl Drop for Notification {
     fn drop(&mut self) {
         let result = unsafe {
-            windows::Win32::System::Power::PowerSettingUnregisterNotification(self.handle)
+            if self.suspend_resume {
+                windows::Win32::System::Power::PowerUnregisterSuspendResumeNotification(self.handle)
+            } else {
+                windows::Win32::System::Power::PowerSettingUnregisterNotification(self.handle)
+            }
         };
         if result.is_err() {
             // If unregister fails, Windows may still call back. Keep both allocations
@@ -172,6 +236,11 @@ unsafe extern "system" fn power_changed(
     event_type: u32,
     setting: *const std::ffi::c_void,
 ) -> u32 {
+    if event_type == 0x12 && !context.is_null() {
+        let sender = &*context.cast::<mpsc::Sender<Event>>();
+        let _ = sender.send(Event::Resume);
+        return 0;
+    }
     use windows::Win32::{
         System::Power::POWERBROADCAST_SETTING, UI::WindowsAndMessaging::PBT_POWERSETTINGCHANGE,
     };
@@ -187,14 +256,27 @@ unsafe extern "system" fn power_changed(
             let sender = &*context.cast::<mpsc::Sender<Event>>();
             let _ = sender.send(Event::Power(ac));
         }
+        if setting.PowerSetting == DISPLAY_STATE && setting.DataLength == 4 {
+            let value = std::ptr::read_unaligned(setting.Data.as_ptr().cast::<u32>());
+            if value <= 2 {
+                let sender = &*context.cast::<mpsc::Sender<Event>>();
+                let _ = sender.send(Event::Display(value != 0));
+            }
+        }
     }
     0
 }
 #[cfg(not(windows))]
-struct Notification;
+pub(crate) struct Notification;
 #[cfg(not(windows))]
 impl Notification {
-    fn new(_: mpsc::Sender<Event>) -> anyhow::Result<Self> {
+    pub(crate) fn new(_: mpsc::Sender<Event>) -> anyhow::Result<Self> {
+        anyhow::bail!("Windows is required")
+    }
+    pub(crate) fn display(_: mpsc::Sender<Event>) -> anyhow::Result<Self> {
+        anyhow::bail!("Windows is required")
+    }
+    pub(crate) fn resume(_: mpsc::Sender<Event>) -> anyhow::Result<Self> {
         anyhow::bail!("Windows is required")
     }
 }
@@ -218,5 +300,17 @@ mod tests {
             Watcher::new(settings, eframe::egui::Context::default(), crate::blade_curves::shared());
         watcher.stop();
         assert!(watcher.thread.is_none());
+    }
+    #[test]
+    fn resume_callback_routes_only_the_resume_event_without_a_setting_pointer() {
+        let (sender, receiver) = mpsc::channel();
+        unsafe {
+            power_changed((&sender as *const mpsc::Sender<Event>).cast(), 0x12, std::ptr::null());
+        }
+        assert!(matches!(receiver.try_recv().unwrap(), Event::Resume));
+        unsafe {
+            power_changed((&sender as *const mpsc::Sender<Event>).cast(), 0x04, std::ptr::null());
+        }
+        assert!(receiver.try_recv().is_err());
     }
 }

@@ -1,5 +1,9 @@
 # Blade 18 controller capability inventory
 
+See the [controller discovery pass](blade18-discovery.md) for newly verified
+charger telemetry, the charge-once bit path, unsupported PWM getters and the
+distinction between unused library methods and actual hidden hardware features.
+
 Target: RZ09-0529 / PID 1532:02c7. Research date: 2026-10-14. BIOS remains 2.01;
 the owner skipped the 4.01 update. A command in a shared protocol library or a
 Synapse feature flag is not proof that this SKU accepts its setter.
@@ -61,6 +65,11 @@ hidden-app AC/battery switching passed. This is separate from HID panel-mode or
 dual-resolution switching; see [display validation](blade18-display.md).
 Firmware keyboard Breathing passed readback/restoration and owner visual
 confirmation. Advertised Spectrum did not apply in the tested forms and is blocked.
+The 0.5.0 batch additionally passed command/metadata checks for dual Breathing,
+Wave left/right, Reactive and bounded per-key rows. Pixels cannot be read back;
+the per-key editor remains experimental. Shared flag `04` provides charge-once
+request/cancel while preserving the observed other flags. See the
+[feature batch](blade18-feature-batch.md) for automation and validation distinctions.
 
 ## Sources
 
