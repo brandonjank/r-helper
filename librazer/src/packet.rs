@@ -57,7 +57,10 @@ impl Packet {
         let allowed = match command {
             // Exact model-711 callers: startup uses profile 0; underside uses class 1.
             0x0f18 => matches!(args, [0, 0 | 1]),
+            // Bounded firmware static keyboard RGB, profile 1 / region 5 only.
+            0x0f02 => matches!(args, [1, 5, 1, 0, 1, 1, _, _, _]),
             0x0300 if matches!(args, [1, 38, 0 | 1]) => true,
+            0x0303 => matches!(args, [1, 38, _]),
             0x0300 => matches!(args, [1, 4, 0 | 1]),
             0x0302 => matches!(args, [1, 4, 0 | 2]),
             0x0712 => matches!(args, [0x50 | 0xd0]),
@@ -109,10 +112,12 @@ impl Packet {
             0x0f84 => matches!(args, [1, 4 | 5, 0]),
             0x0d90 => args == [0, 0, 0],
             0x0d8f => args == [0],
-            0x0383 => args == [1, 5, 0],
+            0x0383 => matches!(args, [1, 5 | 38, 0]),
             0x0380 => args == [1, 4, 0] || args == [0, 38, 0],
             0x0382 => args == [1, 4, 0] || args == [1, 5, 0],
-            0x0381 => args == [1, 4, 0, 0, 0] || args == [1, 5, 0, 0, 0],
+            0x0381 => {
+                args == [1, 4, 0, 0, 0] || args == [1, 5, 0, 0, 0] || args == [0, 38, 0, 0, 0]
+            }
             0x0084 => args == [0, 0],
             0x0792 | 0x078f => args == [0],
             // Selector 4 is included only as a getter after the device's ID list
@@ -217,6 +222,26 @@ impl TryFrom<&[u8]> for Packet {
 #[cfg(test)]
 mod diagnostic_tests {
     use super::Packet;
+    #[test]
+    fn static_keyboard_setter_cannot_write_other_regions_effects_or_frames() {
+        let valid = [1, 5, 1, 0, 1, 1, 32, 64, 255];
+        assert!(Packet::new(0x0f02, &valid).ensure_blade18_access().is_ok());
+        assert!(Packet::new(0x0f02, &valid).ensure_diagnostic_query().is_err());
+        for field in 0..6 {
+            for value in 0..=255 {
+                let mut args = valid;
+                args[field] = value;
+                assert_eq!(
+                    Packet::new(0x0f02, &args).ensure_blade18_access().is_ok(),
+                    value == valid[field]
+                );
+            }
+        }
+        assert!(Packet::new(0x0f02, &valid[..8]).ensure_blade18_access().is_err());
+        assert!(Packet::new(0x0f02, &[1, 5, 1, 0, 1, 1, 32, 64, 255, 0])
+            .ensure_blade18_access()
+            .is_err());
+    }
     #[test]
     fn lighting_switches_cannot_enable_other_profiles_regions_or_effect_writes() {
         for profile in 0..=2 {

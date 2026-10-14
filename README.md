@@ -143,7 +143,7 @@ See [controller capability inventory](docs/razer-controller-capabilities.md) for
 other source-backed controls and their current verification status.
 
 [Lighting controls and evidence](docs/blade18-lighting.md) cover the tested
-startup-animation and independent underside switches, keyboard RGB inventory,
+startup-animation and independent underside switches/brightness, static keyboard RGB,
 single-color logo, and remaining Chroma color-control work.
 
 

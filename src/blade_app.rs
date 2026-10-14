@@ -37,6 +37,8 @@ struct BladeApp {
     sensor_report: Option<serde_json::Value>,
     capability_report: Option<serde_json::Value>,
     lighting: Option<blade18::lighting::Lighting>,
+    keyboard_color: [u8;3],
+    underside_brightness: u8,
     preview: bool,
     curve_settings: blade18::CurveSettings,
     curve_error: Option<String>,
@@ -99,6 +101,8 @@ impl BladeApp {
             sensor_report: None,
             capability_report: None,
             lighting: None,
+            keyboard_color: [32,64,255],
+            underside_brightness: 64,
             preview: false,
             curve_settings,
             curve_error,
@@ -276,6 +280,10 @@ impl BladeApp {
                     self.report = serde_json::to_string_pretty(&report).unwrap_or_default();
                     if report["lighting_controls"].is_object() {
                         self.lighting = serde_json::from_value(report["lighting_controls"].clone()).ok();
+                        if let Some(lighting)=&self.lighting { self.underside_brightness=lighting.underside_brightness; }
+                        if let Some(effect)=self.lighting.as_ref().map(|v| &v.keyboard_effect) {
+                            if effect.len()==9 && effect[2]==1 { self.keyboard_color.copy_from_slice(&effect[6..9]); }
+                        }
                     } else if report["thermal_capabilities"].is_object() {
                         self.capability_report = Some(report);
                     } else {

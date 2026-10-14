@@ -252,6 +252,8 @@ fn collect_impl(
             for (name, cmd, args) in [
                 ("chroma_regions", 0x0f80, vec![0; 80]),
                 ("underside_enabled", 0x0380, vec![0, 38, 0]),
+                ("underside_brightness", 0x0383, vec![1, 38, 0]),
+                ("underside_rgb", 0x0381, vec![0, 38, 0, 0, 0]),
                 ("keyboard_effect_ids", 0x0f81, {
                     let mut a = vec![0; 80];
                     a[0] = 5;

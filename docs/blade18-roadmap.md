@@ -8,8 +8,11 @@ Latest lighting milestone: startup-animation and independent underside switches
 are implemented and passed toggle/readback/restoration tests, including the app UI.
 The controller advertises keyboard RGB and a single-color logo; region 38 is an
 enable switch, not an advertised independent Chroma RGB region. Current keyboard
-custom-frame pixels cannot be restored from the effect getter, so color writes
-remain blocked. See [lighting evidence and next steps](blade18-lighting.md).
+custom-frame pixels cannot be restored from the effect getter. The owner approved
+an explicit handoff to firmware static RGB; RGB primary readbacks/restoration,
+visual blue confirmation and the app color picker passed. Underside brightness
+is now independent and tested; other effects and underside RGB remain open.
+See [lighting evidence and next steps](blade18-lighting.md).
 
 ## Findings on this machine
 

@@ -18,7 +18,8 @@ Synapse feature flag is not proof that this SKU accepts its setter.
 | Panel-resolution getter `0d8e` | Returns `[0]` after accepting its exact observed one-byte header variant. Panel-mode writes and enum interpretation remain unverified. This is separate from ordinary Windows refresh-rate selection. |
 | Startup-animation control | Getter `0f98`, setter `0f18 [0,disabled]`; source-backed profile 0, toggle/readback/restore and native UI passed. Actual boot appearance remains unobserved. |
 | Underside lighting switch | Getter `0380 [0,38,0]`, setter `0300 [1,38,enabled]`; independent toggle/readback/restore and native UI passed. Physical appearance and independent RGB remain open. |
-| Chroma region inventory | Keyboard region 5 is RGB 6×19; logo region 4 is single-color PWM 1×1. Effects and brightness are readable. Current keyboard CustomFrame pixels are not recoverable from the effect getter; color setters remain blocked. See [lighting evidence](blade18-lighting.md). |
+| Chroma region inventory / static keyboard RGB | Keyboard region 5 is RGB 6×19; logo region 4 is single-color PWM 1×1. Explicit static keyboard color replacement is implemented; RGB primary readbacks/restoration and blue visual confirmation passed. Other effects/frame writes remain blocked. CustomFrame pixels cannot be backed up. See [lighting evidence](blade18-lighting.md). |
+| Underside brightness | `0383 [1,38,0]` / `0303 [1,38,value]`; 64→56→64 passed, independently of keyboard brightness and the enable switch. The LED-38 RGB getter returns NotSupported. |
 | Logical fan ID 4 | Advertised and readable: actual 0, stored target 3000, Auto. Purpose unknown; no fourth-fan control or physical fan claim. |
 
 The class-0 alternate cooling-mode getter `0d90` returned **NotSupported**. This

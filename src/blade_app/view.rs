@@ -98,6 +98,8 @@ impl BladeApp {
             preview: true,
             capability_report: None,
             lighting: None,
+            keyboard_color: [32,64,255],
+            underside_brightness: 64,
             curve_settings: blade18::CurveSettings::default(),
             curve_error: None,
             curve_events: None,
@@ -119,6 +121,7 @@ impl BladeApp {
         let mut read_capabilities = false;
         let mut read_lighting = false;
         let mut lighting_change = None;
+        let mut keyboard_static = None;
         egui::CentralPanel::default().frame(egui::Frame::new().fill(Color32::from_rgb(19,22,27)).inner_margin(18)).show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
@@ -202,11 +205,30 @@ impl BladeApp {
                         });
                         if ui.add_enabled(enabled, egui::Button::new("Read lighting controls")).clicked() { read_lighting=true; }
                         if let Some(lighting)=&self.lighting {
+                            ui.add_enabled_ui(enabled, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label("Static keyboard color");
+                                    ui.color_edit_button_srgb(&mut self.keyboard_color);
+                                    ui.monospace(format!("#{:02X}{:02X}{:02X}",self.keyboard_color[0],self.keyboard_color[1],self.keyboard_color[2]));
+                                    if ui.button("Apply color").clicked() { keyboard_static=Some(self.keyboard_color); }
+                                });
+                            });
+                            hint(ui,"Apply replaces the current keyboard effect.");
+                            hint(ui,"Reapply a Synapse preset to return to Chroma.");
                             let mut underside=lighting.underside;
                             let mut startup=lighting.startup_animation;
                             if ui.add_enabled(enabled,egui::Checkbox::new(&mut underside,"Underside light")).changed() {
                                 lighting_change=Some(blade18::lighting::Change::Underside(underside));
                             }
+                            ui.add_enabled_ui(enabled,|ui| {
+                                ui.spacing_mut().slider_width=140.0;
+                                ui.horizontal(|ui| {
+                                    ui.label("Underside brightness");
+                                    ui.add(egui::Slider::new(&mut self.underside_brightness,0..=255).show_value(false));
+                                    ui.label(format!("{}%",(u16::from(self.underside_brightness)*100+127)/255));
+                                    if ui.button("Apply underside").clicked() { lighting_change=Some(blade18::lighting::Change::UndersideBrightness(self.underside_brightness)); }
+                                });
+                            });
                             if ui.add_enabled(enabled,egui::Checkbox::new(&mut startup,"Startup animation")).changed() {
                                 lighting_change=Some(blade18::lighting::Change::StartupAnimation(startup));
                             }
@@ -303,10 +325,12 @@ impl BladeApp {
         if let Some(change) = requested {
             self.start(ctx, "Apply setting", None, move || blade18::change(change));
         }
-        if (read_sensors || read_capabilities || read_lighting || lighting_change.is_some()) && !self.preview {
+        if (read_sensors || read_capabilities || read_lighting || lighting_change.is_some() || keyboard_static.is_some()) && !self.preview {
             let (sender, receiver) = mpsc::channel();
             self.sensor_job = Some(receiver);
-            self.message = if read_lighting || lighting_change.is_some() {
+            self.message = if keyboard_static.is_some() {
+                "Applying keyboard color…"
+            } else if read_lighting || lighting_change.is_some() {
                 "Reading lighting settings…"
             } else if read_capabilities {
                 "Reading controller capabilities…"
@@ -317,7 +341,15 @@ impl BladeApp {
             let repaint = ctx.clone();
             std::thread::spawn(move || {
                 let _ = sender.send(
-                    (if read_lighting || lighting_change.is_some() {
+                    (if let Some(rgb)=keyboard_static {
+                        (|| {
+                            let folder=std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA").ok_or_else(||anyhow::anyhow!("Settings folder unavailable"))?).join("RHelper").join("lighting-changes");
+                            std::fs::create_dir_all(&folder)?;
+                            let stamp=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos();
+                            let path=folder.join(format!("{}-{stamp}.json",std::process::id()));
+                            blade18::lighting::keyboard_static(rgb,&path).map(|state|serde_json::json!({"lighting_controls":state}))
+                        })()
+                    } else if read_lighting || lighting_change.is_some() {
                         lighting_change.map_or_else(blade18::lighting::status,blade18::lighting::change)
                             .map(|state|serde_json::json!({"lighting_controls":state}))
                     } else if read_capabilities {

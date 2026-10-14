@@ -6,6 +6,18 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(version)]
 struct Args {
+    /// Test RGB primaries and restore an already-static keyboard; never adopts Chroma.
+    #[arg(long, requires="output", conflicts_with_all=["keyboard_static", "take_keyboard_control", "restore_keyboard", "probe", "probe_interface", "probe_lighting", "probe_sensors", "probe_thermal_capabilities", "validate_lighting_switches", "restore_lighting", "validate_brightness", "validate_batch", "validate_fans", "validate_fan_zones", "identify_main_fan", "restore_state"])]
+    validate_keyboard_static: bool,
+    /// Restore only a journaled firmware static keyboard color.
+    #[arg(long, conflicts_with_all=["output", "keyboard_static", "take_keyboard_control", "validate_keyboard_static", "probe", "probe_interface", "probe_lighting", "probe_sensors", "probe_thermal_capabilities", "validate_lighting_switches", "restore_lighting", "validate_brightness", "validate_batch", "validate_fans", "validate_fan_zones", "identify_main_fan", "restore_state"])]
+    restore_keyboard: Option<PathBuf>,
+    /// Explicitly replace the current keyboard effect with firmware static RGB (RRGGBB).
+    #[arg(long, requires_all = ["output", "take_keyboard_control"], conflicts_with_all = ["probe", "probe_interface", "probe_lighting", "probe_sensors", "probe_thermal_capabilities", "validate_lighting_switches", "restore_lighting", "validate_brightness", "validate_batch", "validate_fans", "validate_fan_zones", "identify_main_fan", "restore_state"])]
+    keyboard_static: Option<String>,
+    /// Acknowledge replacing host-rendered Chroma pixels, which HID cannot back up.
+    #[arg(long, requires = "keyboard_static")]
+    take_keyboard_control: bool,
     /// Restore only the two switches from a lighting validation recovery file.
     #[arg(long, conflicts_with_all = ["output", "probe", "probe_interface", "probe_lighting", "probe_sensors", "probe_thermal_capabilities", "validate_lighting_switches", "validate_brightness", "validate_batch", "validate_fans", "validate_fan_zones", "identify_main_fan", "restore_state"])]
     restore_lighting: Option<PathBuf>,
@@ -73,6 +85,43 @@ struct Args {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    if args.validate_keyboard_static {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&librazer::blade18::lighting::validate_keyboard_static(
+                args.output.as_ref().unwrap()
+            )?)?
+        );
+        return Ok(());
+    }
+    if let Some(path) = args.restore_keyboard {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&librazer::blade18::lighting::restore_keyboard_record(
+                &path
+            )?)?
+        );
+        return Ok(());
+    }
+    if let Some(hex) = args.keyboard_static {
+        anyhow::ensure!(
+            hex.len() == 6 && hex.bytes().all(|b| b.is_ascii_hexdigit()),
+            "Color must be six hexadecimal digits (RRGGBB)"
+        );
+        let rgb = [
+            u8::from_str_radix(&hex[0..2], 16)?,
+            u8::from_str_radix(&hex[2..4], 16)?,
+            u8::from_str_radix(&hex[4..6], 16)?,
+        ];
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&librazer::blade18::lighting::keyboard_static(
+                rgb,
+                args.output.as_ref().unwrap()
+            )?)?
+        );
+        return Ok(());
+    }
     if let Some(path) = args.restore_lighting {
         println!(
             "{}",
@@ -179,6 +228,40 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn keyboard_handoff_is_explicit_and_cannot_mix_with_other_hardware_actions() {
+        assert!(Args::try_parse_from([
+            "diag",
+            "--keyboard-static",
+            "2040FF",
+            "--output",
+            "test.json"
+        ])
+        .is_err());
+        assert!(Args::try_parse_from([
+            "diag",
+            "--keyboard-static",
+            "2040FF",
+            "--take-keyboard-control",
+            "--output",
+            "test.json"
+        ])
+        .is_ok());
+        assert!(Args::try_parse_from([
+            "diag",
+            "--keyboard-static",
+            "2040FF",
+            "--take-keyboard-control",
+            "--output",
+            "test.json",
+            "--probe"
+        ])
+        .is_err());
+        assert!(Args::try_parse_from(["diag", "--validate-keyboard-static"]).is_err());
+        assert!(
+            Args::try_parse_from(["diag", "--restore-keyboard", "test.json", "--probe"]).is_err()
+        );
+    }
     #[test]
     fn lighting_validation_requires_a_journal_and_excludes_other_actions() {
         assert!(Args::try_parse_from(["diag", "--validate-lighting-switches"]).is_err());
