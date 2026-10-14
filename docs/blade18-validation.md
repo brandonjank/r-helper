@@ -55,13 +55,20 @@ this machine hit Windows Application Control error 4551 when running the generat
 build locally while release builds are checked in GitHub Actions. During brightness
 development all seven library tests passed; a zero-test diagnostic binary test
 was separately blocked by local Application Control error 4551. The updated GUI
-compiled successfully but Application Control also blocked launching it. The prior
-diagnostics window was closed for the rebuild; the updated GUI is not running.
+compiled successfully but Application Control also initially blocked launching it.
+
+The blocker was subsequently identified in Code Integrity events as Smart App
+Control, not an antivirus detection. The owner chose to disable Smart App Control
+through Windows Security for local development; the policy state was verified as
+Off and the updated GUI launched successfully.
+
+The actual GUI slider and Apply button were tested: 176 → 168 with device readback,
+then restoration to 176 with matching readback. The application remains running.
 
 ## Next validation steps
 
 1. Compare getter snapshots with Synapse's displayed values, including both fan zones.
-2. Keyboard brightness round trip passed; visually confirm the new slider, then validate logo setters.
+2. Keyboard brightness round trip and GUI test passed; next validate logo setters.
 3. Validate battery care behavior and persistence across sleep and restart.
 4. Record supported performance modes and CPU/GPU combinations for this Intel model.
 5. Validate fan control limits and rollback before exposing manual controls.
