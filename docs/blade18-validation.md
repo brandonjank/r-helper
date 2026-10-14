@@ -203,3 +203,21 @@ the new isolated baseline; no physical CPU/GPU/battery mapping is claimed.
 
 See [post-update details](blade18-post-update.md) for evidence, the four-logical-ID
 capability result, unsupported battery temperature, and remaining curve gates.
+
+## App curve sessions and additional capability reads
+
+The subsequent integration offers explicit AC/Balanced curve sessions with a
+three-fan editor and separate watchdog/controller processes. Stop, WorkerExit,
+WatchdogExit, ParentExit and Timeout cases passed independent Auto/target recovery.
+The first timeout's follow-up read failed transiently; the controller/watchdog
+recovery succeeded, the failed report remains local, and the corrected harness's
+rerun passed. Native UI validation covered invalid points, saving, launch, live
+readings and serialized mode handoff; Balanced/Auto was restored.
+
+39 tests and the optimized workspace build pass. Inactive tray-hidden CPU usage
+remains 0.015625 seconds in roughly 30 seconds (0.052% of one core). Physical
+sleep/AC transitions and independent CPU die validation remain pending.
+
+Graphics, panel-mode and startup-animation getters are readable; their setters
+remain unverified. The class-0 alternate cooling-mode getter returns NotSupported.
+See [curve sessions](curve-sessions.md) and [capability inventory](razer-controller-capabilities.md).

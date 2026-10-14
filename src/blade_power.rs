@@ -20,6 +20,7 @@ impl Watcher {
     pub fn new(
         settings: Arc<Mutex<Settings>>,
         ctx: eframe::egui::Context,
+        curves: crate::blade_curves::Shared,
     ) -> (Self, mpsc::Receiver<Update>) {
         let (events, incoming) = mpsc::channel();
         let callbacks = events.clone();
@@ -67,11 +68,18 @@ impl Watcher {
                     Ok(saved) => saved.clone(),
                     Err(_) => return,
                 };
+                let stopped = if previous.is_some() {
+                    crate::blade_curves::stop_and_wait(&curves)
+                } else {
+                    Ok(())
+                };
                 let result = blade_profiles::transition(previous, current, saved.automatic)
                     .and_then(|ac| {
                         let profile = if ac { saved.ac } else { saved.battery };
                         profile.map(|profile| {
-                            blade18::apply_profile(&profile).map_err(|error| format!("{error:#}"))
+                            stopped
+                                .and_then(|_| blade18::apply_profile(&profile))
+                                .map_err(|error| format!("{error:#}"))
                         })
                     });
                 previous = current;
@@ -205,7 +213,8 @@ mod tests {
     #[test]
     fn stop_wakes_an_idle_watcher_without_a_timer() {
         let settings = Arc::new(Mutex::new(Settings::default()));
-        let (mut watcher, _) = Watcher::new(settings, eframe::egui::Context::default());
+        let (mut watcher, _) =
+            Watcher::new(settings, eframe::egui::Context::default(), crate::blade_curves::shared());
         watcher.stop();
         assert!(watcher.thread.is_none());
     }

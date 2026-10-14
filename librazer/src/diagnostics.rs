@@ -112,6 +112,10 @@ pub fn collect_thermal_capabilities() -> Result<Value> {
         ("vga_hardware_information", 0x0d8a, vec![0; 2]),
         ("synapse_ui_settings", 0x0d8b, vec![0; 2]),
         ("sku_hardware_configuration", 0x0d8f, vec![0]),
+        ("vga_configuration", 0x0d89, vec![0, 0]),
+        ("panel_resolution_mode", 0x0d8e, vec![0]),
+        ("fan_cooling_mode_class_0", 0x0d90, vec![0, 0, 0]),
+        ("startup_animation_control", 0x0f98, vec![0]),
     ] {
         let result = command::send_command(&device, command_id, &args);
         getters.insert(

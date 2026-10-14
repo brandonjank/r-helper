@@ -94,14 +94,18 @@ The offline `librazer::fan_curve` planner now supports three independent inputs,
 monotonic curve validation, linear interpolation and upward 100-RPM quantization.
 It returns a shared automatic-mode plan for absent/stale/invalid readings, thermal
 cutoffs or unverified capabilities. The planner itself has no hardware access.
-A separate supervised, time-limited lab controller now exercises it using neutral
-fan numbers and explicit EC proxies; it is not connected to persistent GUI control.
+A separate supervised lab controller and opt-in app sessions now exercise it using
+neutral fan numbers and explicit EC proxies. The app editor supports source and
+point editing, live readings while active, Stop/Auto and a session limit; it never
+starts curves at login or on battery.
 Its pure tests use synthetic envelopes, including for
 the third curve; they do not establish physical fan limits. Per-zone downward
 damping now holds decreases and steps them down by 100 RPM, with immediate
 increases and undelayed safety fallback plans. Scheduling, cross-sensor policy,
-production watchdog integration and real model limits remain future work. The
-lab supervisor restores captured settings after its own child is terminated.
+full physical sensor/fan validation and real model limits remain future work.
+The app watchdog and controller monitor each other's liveness and recover fan
+settings on exit/failure. Real sleep/resume and physical power transitions with
+this backend still need validation. See [curve sessions](curve-sessions.md).
 
 See [post-update validation](blade18-post-update.md) before resuming live tests.
 
@@ -145,8 +149,9 @@ temperature sources, capture any firmware curve interface and establish per-fan
 bounds. Deliver the separate curves and failure behavior described above, a clear
 automatic-cooling restore action, logging, and AC/battery/load/sleep tests.
 Third-fan target writes and supervised curve/fallback tests now work in the lab.
-Persistent GUI third-fan control remains unavailable pending production safeguards
-and a validated sensor policy.
+Opt-in GUI sessions include the third selector using an explicitly chosen EC
+proxy; it is not labeled as a battery-temperature curve. Unattended startup and
+on-battery curves remain disabled pending validation.
 
 ### M5 — NVIDIA tuning and CPU undervolt investigation
 

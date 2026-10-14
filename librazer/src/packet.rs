@@ -90,6 +90,9 @@ impl Packet {
             0x0d80 => args == [0; 80],
             0x0d83 => args == [0; 12],
             0x0d8a | 0x0d8b => args == [0, 0],
+            0x0d89 => args == [0, 0],
+            0x0d8e | 0x0f98 => args == [0],
+            0x0d90 => args == [0, 0, 0],
             0x0d8f => args == [0],
             0x0383 => args == [1, 5, 0],
             0x0380 => args == [1, 4, 0],
@@ -161,6 +164,7 @@ impl Packet {
                     (0x0d, 0x80, 80, 0x0500) => self.args[..5] == [4, 1, 2, 3, 4],
                     (0x0d, 0x83, 12, 0x0c00) => self.args[0] == 0,
                     (0x0d, 0x8f, 1, 0x0100) => self.args[0] == 1,
+                    (0x0d, 0x8e, 1, 0x0100) => self.args[0] <= 1,
                     _ => false,
                 }),
             "Response packet count {} differs from request {}; status {:02x}, data length {}, first arguments {:?}",
@@ -308,7 +312,17 @@ mod diagnostic_tests {
     }
     #[test]
     fn thermal_capability_queries_cannot_become_setters_or_selector_scans() {
-        for (command, size) in [(0x0d80, 80), (0x0d83, 12), (0x0d8a, 2), (0x0d8b, 2), (0x0d8f, 1)] {
+        for (command, size) in [
+            (0x0d80, 80),
+            (0x0d83, 12),
+            (0x0d8a, 2),
+            (0x0d8b, 2),
+            (0x0d8f, 1),
+            (0x0d89, 2),
+            (0x0d8e, 1),
+            (0x0d90, 3),
+            (0x0f98, 1),
+        ] {
             assert!(Packet::new(command, &vec![0; size]).ensure_diagnostic_query().is_ok());
             assert!(Packet::new(command & 0xff7f, &vec![0; size]).ensure_blade18_access().is_err());
             let mut unknown = vec![0; size];
@@ -379,6 +393,7 @@ mod diagnostic_tests {
             (0x0d80, 80, 0x0500, vec![4, 1, 2, 3, 4]),
             (0x0d83, 12, 0x0c00, vec![0]),
             (0x0d8f, 1, 0x0100, vec![1]),
+            (0x0d8e, 1, 0x0100, vec![0]),
         ] {
             let request = Packet::new(command, &vec![0; size]);
             let mut response = Packet::new(command, &vec![0; size]);

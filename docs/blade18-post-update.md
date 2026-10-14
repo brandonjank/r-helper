@@ -243,3 +243,24 @@ After this stage, all 36 workspace tests passed with the optional GPU diagnostic
 feature and the normal Windows debug build succeeded. Final on-demand readings
 confirmed all three selectors in Auto. Production app watchdog/editor integration
 and sleep/profile tests are the next fan-control milestone.
+
+## App integration follow-up
+
+The subsequent app stage adds the three-fan editor, saved settings, source
+selection, live active-session readings and explicit Start/Stop controls. The
+controller and watchdog run as separate headless roles of the same executable.
+Fan-only recovery avoids overwriting a newer performance/lighting/charge profile.
+The normal inactive app has no curve process or telemetry loop.
+
+Live tests passed Stop, WorkerExit, WatchdogExit, ParentExit and Timeout. The
+initial timeout follow-up read failed transiently, although controller and
+watchdog recovery succeeded; its failed report is preserved. The corrected
+harness's timeout rerun passed. Native UI checks verified invalid-point blocking,
+config save, session launch, live three-fan values and serialized mode handoff.
+Balanced/Auto was independently read back afterward.
+
+39 workspace tests pass with optional GPU diagnostics; the optimized Windows
+workspace builds. See [app session details](curve-sessions.md) and
+[additional controller capabilities](razer-controller-capabilities.md). Physical
+sleep/resume, AC transitions with this backend, CPU die accuracy and physical fan
+roles remain open. Sessions stay opt-in on AC, with no login/profile auto-start.

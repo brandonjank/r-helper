@@ -19,6 +19,8 @@ pub const MANUAL_FANS_VERIFIED: bool = true;
 
 mod curve_lab;
 pub use curve_lab::{test_curves, CurveFault};
+mod curve_session;
+pub use curve_session::{run_curve_session, restore_curve_session, CurveSettings, CurveSource, ZoneCurve, CurvePoint};
 
 pub fn ac_connected() -> Result<bool> {
     #[cfg(windows)]

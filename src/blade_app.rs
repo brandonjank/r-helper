@@ -8,6 +8,7 @@ use librazer::{
     types::*,
 };
 use std::{path::PathBuf, sync::mpsc};
+mod curves;
 mod view;
 
 struct Job {
@@ -34,7 +35,13 @@ struct BladeApp {
     power_error: Option<String>,
     sensor_job: Option<mpsc::Receiver<Result<serde_json::Value, String>>>,
     sensor_report: Option<serde_json::Value>,
+    capability_report: Option<serde_json::Value>,
     preview: bool,
+    curve_settings: blade18::CurveSettings,
+    curve_error: Option<String>,
+    curve_events: Option<mpsc::Receiver<serde_json::Value>>,
+    curve_status: Option<serde_json::Value>,
+    curve_control: crate::blade_curves::Shared,
 }
 impl BladeApp {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
@@ -57,8 +64,19 @@ impl BladeApp {
             Err(error) => (None, Some(format!("Tray/hotkeys unavailable: {error:#}"))),
         };
         let shared_settings = std::sync::Arc::new(std::sync::Mutex::new(settings.clone()));
-        let (power_watcher, power_updates) =
-            crate::blade_power::Watcher::new(shared_settings.clone(), ctx.clone());
+        let curve_control = crate::blade_curves::shared();
+        let (curve_settings, curve_error) = match crate::blade_curves::load() {
+            Ok(value) => (value, None),
+            Err(error) => (
+                blade18::CurveSettings::default(),
+                Some(format!("Curve settings preserved: {error:#}")),
+            ),
+        };
+        let (power_watcher, power_updates) = crate::blade_power::Watcher::new(
+            shared_settings.clone(),
+            ctx.clone(),
+            curve_control.clone(),
+        );
         let mut app = Self {
             state: None,
             job: None,
@@ -78,7 +96,13 @@ impl BladeApp {
             power_error: None,
             sensor_job: None,
             sensor_report: None,
+            capability_report: None,
             preview: false,
+            curve_settings,
+            curve_error,
+            curve_events: None,
+            curve_status: None,
+            curve_control,
         };
         app.start(ctx, "Read device state", None, blade18::status);
         app
@@ -101,8 +125,13 @@ impl BladeApp {
         self.job = Some(Job { receiver, save_as, label: label.into() });
         self.message = format!("{label}…");
         let repaint = ctx.clone();
+        let curves = self.curve_control.clone();
         std::thread::spawn(move || {
-            let _ = sender.send(operation().map_err(|error| format!("{error:#}")));
+            let _ = sender.send(
+                crate::blade_curves::stop_and_wait(&curves)
+                    .and_then(|_| operation())
+                    .map_err(|error| format!("{error:#}")),
+            );
             repaint.request_repaint();
         });
     }
@@ -185,13 +214,71 @@ impl BladeApp {
         }
     }
     fn complete(&mut self) {
+        let mut curve_finished = None;
+        if let Some(receiver) = &self.curve_events {
+            while let Ok(event) = receiver.try_recv() {
+                if !event["finished"].is_null() {
+                    curve_finished = Some(event["finished"].clone());
+                } else {
+                    if event["phase"] == "running"
+                        && self.curve_status.as_ref().is_none_or(|old| old["phase"] != "running")
+                        && self.job.is_none()
+                    {
+                        self.message = "Custom curves active · supervised session".into();
+                    }
+                    if let Ok(sample) =
+                        serde_json::from_value::<librazer::thermal::Sample>(event["sample"].clone())
+                    {
+                        if let Some(state) = &mut self.state {
+                            state.fan_actual = [sample.actual_rpm[0], sample.actual_rpm[1]];
+                            state.fan_setpoints = [sample.target_rpm[0], sample.target_rpm[1]];
+                            state.fan_mode = if sample.modes[0][1] == 1 {
+                                FanMode::Manual
+                            } else {
+                                FanMode::Auto
+                            };
+                        }
+                        let sensors =
+                            self.sensor_report.get_or_insert_with(|| serde_json::json!({}));
+                        sensors["sensor_candidates"]["getters"]["ec_temperature_fields"] = serde_json::json!({"ok":true,"response_args":[2,sample.ec_celsius[0],sample.ec_celsius[1],0]});
+                        sensors["sensor_candidates"]["getters"]["fan_zone_3_actual_rpm"] = serde_json::json!({"ok":true,"response_args":[0,3,sample.actual_rpm[2]/100]});
+                    }
+                    self.curve_status = Some(event);
+                }
+            }
+        }
+        if let Some(result) = curve_finished {
+            self.curve_events = None;
+            self.message = if result["recovery_verified"] == true {
+                format!(
+                    "Curves stopped · automatic cooling verified. {}",
+                    result["status"]["reason"].as_str().or(result["reason"].as_str()).unwrap_or("")
+                )
+            } else {
+                format!("Curve recovery needs attention: {result}")
+            };
+            if let Ok(sample) =
+                serde_json::from_value::<librazer::thermal::Sample>(result["recovered"].clone())
+            {
+                if let Some(state) = &mut self.state {
+                    state.fan_mode = FanMode::Auto;
+                    state.fan_actual = [sample.actual_rpm[0], sample.actual_rpm[1]];
+                    state.fan_setpoints = [sample.target_rpm[0], sample.target_rpm[1]];
+                }
+            }
+            self.curve_status = Some(result);
+        }
         if let Some(receiver) = &self.sensor_job {
             match receiver.try_recv() {
                 Ok(Ok(report)) => {
                     self.report = serde_json::to_string_pretty(&report).unwrap_or_default();
-                    self.sensor_report = Some(report);
+                    if report["thermal_capabilities"].is_object() {
+                        self.capability_report = Some(report);
+                    } else {
+                        self.sensor_report = Some(report);
+                    }
                     self.sensor_job = None;
-                    self.message = "Controller sensor query complete; candidate readings need physical validation".into();
+                    self.message = "Controller query complete · exported report available".into();
                 }
                 Ok(Err(error)) => {
                     self.sensor_report = None;
@@ -302,6 +389,7 @@ impl eframe::App for BladeApp {
         if let Some(watcher) = &mut self.power_watcher {
             watcher.stop();
         }
+        let _ = crate::blade_curves::stop_and_wait(&self.curve_control);
         if self.state.as_ref().is_some_and(|state| state.fan_mode == FanMode::Manual) {
             let _ = blade18::change(Change::AutoFans);
         }

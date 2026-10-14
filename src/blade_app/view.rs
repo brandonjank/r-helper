@@ -96,11 +96,17 @@ impl BladeApp {
                 "fan_zone_3_actual_rpm":{"ok":true,"response_args":[0,3,0]}
             }}})),
             preview: true,
+            capability_report: None,
+            curve_settings: blade18::CurveSettings::default(),
+            curve_error: None,
+            curve_events: None,
+            curve_status: None,
+            curve_control: crate::blade_curves::shared(),
         }
     }
 
     pub(super) fn render(&mut self, ctx: &egui::Context, idle: bool) {
-        let enabled = idle && !self.preview;
+        let enabled = idle && !self.preview && self.curve_events.is_none();
         let footer_height = 105.0
             + 20.0
                 * [&self.desktop_error, &self.power_error, &self.settings_error]
@@ -109,6 +115,7 @@ impl BladeApp {
                     .count() as f32;
         let mut requested = None;
         let mut read_sensors = false;
+        let mut read_capabilities = false;
         egui::CentralPanel::default().frame(egui::Frame::new().fill(Color32::from_rgb(19,22,27)).inner_margin(18)).show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
@@ -152,14 +159,14 @@ impl BladeApp {
                                 let reading = &r["sensor_candidates"]["getters"]["fan_zone_3_actual_rpm"];
                                 (reading["ok"] == true).then(|| reading["response_args"][2].as_u64()).flatten()
                             }).map(|rpm| format!("{} RPM", rpm * 100)).unwrap_or_else(|| "—".into());
-                            metric(&mut columns[2], "FAN 3 · CANDIDATE", &third);
+                            metric(&mut columns[2], "FAN 3", &third);
                         });
                         ui.horizontal_wrapped(|ui| {
                             ui.label(format!("EC A: {}", temperature(self.sensor_report.as_ref(), 1)));
                             ui.label(format!("EC B: {}", temperature(self.sensor_report.as_ref(), 2)));
                             if ui.add_enabled(enabled, egui::Button::new("Read sensors")).clicked() { read_sensors = true; }
                         });
-                        hint(ui, "Snapshots only · CPU/GPU sensor and physical fan mapping pending");
+                        hint(ui, if self.curve_events.is_some(){"Live controller readings while curves run · physical roles unresolved"}else{"Snapshots only · EC sensor proxies · physical fan roles unresolved"});
                         ui.horizontal_wrapped(|ui| {
                             ui.label(format!("Cooling: {:?}", state.fan_mode));
                             if ui.add_enabled(enabled, egui::Button::new("Automatic").selected(state.fan_mode == FanMode::Auto)).clicked() { requested = Some(Change::AutoFans); }
@@ -173,9 +180,7 @@ impl BladeApp {
                             });
                             hint(ui, "AC power and Balanced mode required. Speeds ramp slowly; refresh to check.");
                         });
-                        ui.collapsing("Independent curves · in development", |ui| {
-                            hint(ui, "Curve calculations are ready offline. Live control awaits validated sensors and independent fan actuation.");
-                        });
+                        hint(ui,"Independent curve editor below · numbered fans, explicit EC sources");
                     });
                     card(ui, "Lighting", |ui| {
                         ui.add_enabled_ui(enabled, |ui| {
@@ -211,6 +216,7 @@ impl BladeApp {
                         hint(ui, "No replacement values are used when a query fails.");
                     });
                 }
+                self.curve_editor(ui,ctx,idle);
                 // Profile actions require mutable app access after the state borrow ends.
                 card(ui, "Power profiles", |ui| {
                     for ac in [true, false] {
@@ -229,6 +235,16 @@ impl BladeApp {
                     if ui.add_enabled(enabled && self.settings_error.is_none() && self.settings.ac.is_some() && self.settings.battery.is_some(), egui::Checkbox::new(&mut self.settings.automatic, "Switch profiles when power source changes")).changed() { self.persist(); }
                 });
                 card(ui, "More", |ui| {
+                    ui.collapsing("Controller capabilities",|ui|{
+                        if ui.add_enabled(enabled,egui::Button::new("Read capabilities")).clicked(){read_capabilities=true;}
+                        if let Some(report)=&self.capability_report {
+                            for (key,label) in [("vga_configuration","Graphics mode"),("panel_resolution_mode","Panel mode"),("startup_animation_control","Startup animation"),("fan_cooling_mode_class_0","Alternate cooling mode")] {
+                                let getter=&report["thermal_capabilities"]["getters"][key];
+                                ui.label(format!("{label}: {}",if getter["ok"]==true{"readable · writes unverified"}else if getter["error"].as_str().is_some_and(|error|error.contains("Command not supported")){"not supported on this firmware"}else{"query failed · retry"}));
+                            }
+                        }
+                        hint(ui,"Read-only discovery · no graphics, panel or animation changes");
+                    });
                     ui.collapsing("Display + NVIDIA tuning", |ui| {
                         hint(ui, "Refresh-rate switching and NVIDIA tuning are planned. Controls will appear after support is implemented.");
                     });
@@ -264,20 +280,31 @@ impl BladeApp {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.add_enabled(idle, egui::Button::new("Exit")).clicked() { self.action(ctx, Action::Quit); }
                     if self.desktop.is_some() && ui.button("Hide").clicked() { ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false)); }
+                    if self.curve_events.is_some() && ui.add_enabled(idle,egui::Button::new("Stop curves")).clicked(){self.start(ctx,"Stop curves",None,blade18::status);}
                 });
             });
         });
         if let Some(change) = requested {
             self.start(ctx, "Apply setting", None, move || blade18::change(change));
         }
-        if read_sensors && !self.preview {
+        if (read_sensors || read_capabilities) && !self.preview {
             let (sender, receiver) = mpsc::channel();
             self.sensor_job = Some(receiver);
-            self.message = "Reading controller sensor candidates…".into();
+            self.message = if read_capabilities {
+                "Reading controller capabilities…"
+            } else {
+                "Reading controller sensor candidates…"
+            }
+            .into();
             let repaint = ctx.clone();
             std::thread::spawn(move || {
                 let _ = sender.send(
-                    librazer::diagnostics::collect_sensors().map_err(|error| format!("{error:#}")),
+                    (if read_capabilities {
+                        librazer::diagnostics::collect_thermal_capabilities()
+                    } else {
+                        librazer::diagnostics::collect_sensors()
+                    })
+                    .map_err(|error| format!("{error:#}")),
                 );
                 repaint.request_repaint();
             });

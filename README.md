@@ -119,8 +119,9 @@ workflow tests the workspace and uploads optimized binaries as an artifact.
 
 The Blade 18 window uses compact performance buttons, grouped fan and lighting
 controls, AC/battery profiles, and expandable diagnostics and update links.
-Unverified independent fan curves, RGB zones and tuning features are marked as
-in development. Sensor readings are explicit snapshots rather than background polling.
+The experimental [three-fan curve editor](docs/curve-sessions.md) supports opt-in
+supervised AC sessions. RGB zones and tuning features remain in development.
+Sensors are snapshots outside an active curve session; active sessions show live readings.
 
 Run `target/debug/rhelper.exe --preview-blade18` to inspect the interface with
 sample data and disabled hardware controls. Preview mode skips device detection,
@@ -136,7 +137,10 @@ record measured sensor/fan behavior and the remaining curve-controller work.
 
 The [supervised curve test](tools/CurveTest.md) exercises three numbered fans and
 automatic recovery from injected missing/stale readings or controller termination.
-It uses explicit EC proxies and is separate from persistent GUI fan control.
+It uses explicit EC proxies and is separate from the app session runtime.
+
+See [controller capability inventory](docs/razer-controller-capabilities.md) for
+other source-backed controls and their current verification status.
 
 
 ## License
