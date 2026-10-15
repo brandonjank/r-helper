@@ -1,14 +1,15 @@
 param(
     [Parameter(Mandatory)][string]$OutputDirectory,
-    [ValidateSet('Stop','Timeout','WorkerExit','WatchdogExit','ParentExit')][string]$Scenario='Stop'
+    [ValidateSet('Stop','Timeout','WorkerExit','WatchdogExit','ParentExit','AcLoss','SleepResume')][string]$Scenario='Stop',
+    [ValidateSet('debug','release')][string]$BuildConfiguration='release'
 )
 $ErrorActionPreference='Stop'
 $root=Split-Path -Parent $PSScriptRoot
-$directory=[IO.Path]::GetFullPath((Join-Path $root $OutputDirectory))
+$directory=if([IO.Path]::IsPathRooted($OutputDirectory)){[IO.Path]::GetFullPath($OutputDirectory)}else{[IO.Path]::GetFullPath((Join-Path $root $OutputDirectory))}
 if(Test-Path -LiteralPath $directory){throw 'Choose a new session directory.'}
 [IO.Directory]::CreateDirectory($directory)|Out-Null
-$exe=Join-Path $root 'target\debug\rhelper.exe'
-$thermalExe=Join-Path $root 'target\debug\rhelper-thermal.exe'
+$exe=Join-Path $root "target\$BuildConfiguration\rhelper.exe"
+$thermalExe=Join-Path $root "target\$BuildConfiguration\rhelper-thermal.exe"
 $config=@{schema=1;downward_hold_seconds=5;session_seconds=$(if($Scenario -eq 'Timeout'){30}else{120});zones=@(
     @{source='EcA';points=@(@{celsius=50;rpm=4000},@{celsius=80;rpm=4500})},
     @{source='EcB';points=@(@{celsius=35;rpm=4000},@{celsius=70;rpm=4500})},
@@ -53,8 +54,10 @@ try {
         }
         'WatchdogExit' {$supervisor.Kill();$supervisor.WaitForExit()}
         'ParentExit' {$parent.Kill();$parent.WaitForExit()}
+        'AcLoss' {@{scenario=$Scenario;instruction='Unplug AC now and leave it unplugged until restoration is verified.'}|ConvertTo-Json|Set-Content (Join-Path $directory 'awaiting-owner.json')}
+        'SleepResume' {@{scenario=$Scenario;instruction='Sleep for at least 15 seconds, then wake and unlock. Owner confirmation is required to establish physical sleep.'}|ConvertTo-Json|Set-Content (Join-Path $directory 'awaiting-owner.json')}
     }
-    $deadline=[DateTime]::UtcNow.AddSeconds(45)
+    $deadline=[DateTime]::UtcNow.AddSeconds($(if($Scenario -in @('AcLoss','SleepResume')){120}else{45}))
     do {
         if($Scenario -eq 'WatchdogExit'){
             $status=Get-Content (Join-Path $directory 'status.json') -Raw|ConvertFrom-Json
@@ -65,6 +68,16 @@ try {
         }elseif(Test-Path (Join-Path $directory 'finished.json')){
             $finished=Get-Content (Join-Path $directory 'finished.json') -Raw|ConvertFrom-Json
             if(!$finished.recovery_verified){throw 'Watchdog recovery was not verified.'}
+            if($Scenario -eq 'AcLoss'){
+                if($finished.status.error -notmatch 'AC disconnected or unknown'){throw 'Recovered for another reason; AC-loss fallback is not verified.'}
+                $battery=@(Get-CimInstance -Namespace root/wmi -ClassName BatteryStatus)
+                if($battery.Count -ne 1 -or $battery[0].PowerOnline){throw 'AC disconnection was not independently observed.'}
+            }
+            if($Scenario -eq 'SleepResume'){
+                $reason=(@($finished.status.error,$finished.reason) -join ' ')
+                if($reason -notmatch 'Resume|heartbeat'){throw 'Recovered for another reason; delayed-worker/resume fallback is not verified.'}
+                $test['requires_owner_sleep_confirmation']=$true
+            }
             $test.finished=$finished;break
         }
         Start-Sleep -Milliseconds 200
