@@ -17,6 +17,8 @@ struct Request {
     preset: Preset,
     rgb: [u8; 3],
     highlight: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    native_mode: Option<blade18::lighting::NativeMode>,
 }
 impl Request {
     fn validate(&self) -> Result<()> {
@@ -44,6 +46,16 @@ fn load(path: &Path) -> Result<Request> {
     request.validate()?;
     Ok(request)
 }
+fn restore(request: &Request, path: &Path) -> Result<blade18::lighting::Lighting> {
+    let mode_result = request
+        .native_mode
+        .map(|mode| blade18::lighting::set_native_mode(mode, &path.with_extension("mode.json")))
+        .transpose();
+    // Attempt firmware restoration even when restoring driver mode reports an error.
+    let lighting = request.preset.apply(path);
+    mode_result?;
+    lighting
+}
 fn command(mode: &str, request: &Path, output: &Path) -> Result<std::process::Command> {
     let mut command = std::process::Command::new(std::env::current_exe()?);
     command.arg(mode).arg(request).arg(output);
@@ -57,10 +69,20 @@ fn command(mode: &str, request: &Path, output: &Path) -> Result<std::process::Co
 /// Called under the GUI's device operation lock. That lock keeps profile/idle
 /// workers from writing while this bounded test and its restoration run.
 pub fn run(rgb: [u8; 3], highlight: Option<u8>, path: &Path) -> Result<serde_json::Value> {
+    run_kind(rgb, highlight, path, false, None)
+}
+fn run_kind(
+    rgb: [u8; 3],
+    highlight: Option<u8>,
+    path: &Path,
+    native: bool,
+    keyboard_override: Option<[u8; 3]>,
+) -> Result<serde_json::Value> {
     let request = Request {
         preset: Preset::capture(&blade18::lighting::status()?, blade18::status()?.logo)?,
         rgb,
         highlight,
+        native_mode: if native { Some(blade18::lighting::native_mode()?) } else { None },
     };
     request.validate()?;
     save(path, &request)?;
@@ -93,9 +115,26 @@ pub fn run(rgb: [u8; 3], highlight: Option<u8>, path: &Path) -> Result<serde_jso
         // LampArray writes do not enable the separate underside power gate.
         // Recovery retains its original power and brightness values.
         let mut powered = request.preset.clone();
-        powered.underside = true;
+        powered.underside = !native;
         powered.underside_brightness = powered.underside_brightness.max(200);
         powered.apply(&path.with_extension("power-on.json"))?;
+        if native {
+            blade18::lighting::set_native_mode(
+                blade18::lighting::NativeMode::Driver,
+                &path.with_extension("driver-mode.json"),
+            )?;
+        }
+        if native {
+            ensure!(highlight.is_none(), "Individual native columns are not physically mapped yet");
+            let report = blade18::lighting::native_static_zones(
+                keyboard_override.unwrap_or(request.preset.color),
+                rgb,
+                &path.with_extension("native-frame.json"),
+            )?;
+            save(&output, &report)?;
+            std::thread::sleep(Duration::from_secs(20));
+            return Ok(report);
+        }
         let mut child = command("--auxiliary-preview", path, &output)?.spawn()?;
         let start = Instant::now();
         let status = loop {
@@ -118,7 +157,7 @@ pub fn run(rgb: [u8; 3], highlight: Option<u8>, path: &Path) -> Result<serde_jso
     })();
     // The foreground owner has exited before firmware restoration. Dropping a
     // LampArray inside the still-foreground tray process was insufficient on RB18.
-    let restored = request.preset.apply(&path.with_extension("restore.json"));
+    let restored = restore(&request, &path.with_extension("restore.json"));
     let log_result = save(
         &path.with_extension("result.json"),
         &serde_json::json!({
@@ -145,7 +184,17 @@ pub fn run(rgb: [u8; 3], highlight: Option<u8>, path: &Path) -> Result<serde_jso
 pub fn dispatch() -> Option<Result<()>> {
     let args = std::env::args().collect::<Vec<_>>();
     let mode = args.get(1)?.as_str();
-    if !matches!(mode, "--auxiliary-preview" | "--auxiliary-recover" | "--auxiliary-test") {
+    if !matches!(
+        mode,
+        "--auxiliary-preview"
+            | "--auxiliary-recover"
+            | "--auxiliary-test"
+            | "--native-lighting-test"
+            | "--native-lighting-batch"
+            | "--native-channel-test"
+            | "--native-profile-test"
+            | "--native-lighting-inspect"
+    ) {
         return None;
     }
     Some((|| {
@@ -154,11 +203,98 @@ pub fn dispatch() -> Option<Result<()>> {
         let path = PathBuf::from(&args[2]);
         let output = PathBuf::from(&args[3]);
         let request = load(&path)?;
-        if mode == "--auxiliary-test" {
+        if mode == "--native-profile-test" {
+            let original = Preset::capture(&blade18::lighting::status()?, blade18::status()?.logo)?;
+            let mut ownership = crate::blade_vendor::Session::start()?;
+            let applied = (|| -> Result<serde_json::Value> {
+                let mut preset = original.clone();
+                preset.style = Style::Static;
+                preset.speed = None;
+                preset.color = [0, 0, 255];
+                preset.underside_color = Some([255, 0, 0]);
+                preset.underside = true;
+                preset.underside_brightness = 200;
+                preset.apply(&output.with_extension("apply.json"))?;
+                let captured =
+                    Preset::capture(&blade18::lighting::status()?, blade18::status()?.logo)?;
+                ensure!(captured == preset, "Independent underside profile capture lost color");
+                let encoded = serde_json::to_vec(&captured)?;
+                let decoded: Preset = serde_json::from_slice(&encoded)?;
+                ensure!(decoded == preset, "Independent underside profile roundtrip lost color");
+                save(
+                    &output.with_extension("active.json"),
+                    &serde_json::json!({"preset":captured,"native_mode":blade18::lighting::native_mode()?,"capture_roundtrip":true}),
+                )?;
+                std::thread::sleep(Duration::from_secs(20));
+                Ok(
+                    serde_json::json!({"profile_roundtrip":true,"keyboard":"blue","underside":"red","continuous_frames":false}),
+                )
+            })();
+            let released = ownership.stop();
+            let restored = Preset::capture(&blade18::lighting::status()?, blade18::status()?.logo);
+            let matches = restored.as_ref().is_ok_and(|p| p == &original);
+            save(
+                &output,
+                &serde_json::json!({"applied":applied.as_ref().ok(),"apply_error":applied.as_ref().err().map(|e|format!("{e:#}")),"vendor_restored":released.is_ok(),"restore_error":released.as_ref().err().map(|e|format!("{e:#}")),"original_lighting_restored":matches,"native_mode":blade18::lighting::native_mode()?}),
+            )?;
+            released?;
+            applied?;
+            ensure!(matches, "Original lighting did not restore exactly");
+            return Ok(());
+        }
+        if mode == "--native-lighting-inspect" {
+            save(
+                &output,
+                &serde_json::json!({"read_only":true,"native_mode":blade18::lighting::native_mode()?}),
+            )?;
+            return Ok(());
+        }
+        if mode == "--auxiliary-test"
+            || mode == "--native-lighting-test"
+            || mode == "--native-lighting-batch"
+            || mode == "--native-channel-test"
+        {
             // Explicit, bounded diagnostic entry point. Keep reversible vendor
             // ownership local to this batch rather than a persistent GUI session.
             let mut ownership = crate::blade_vendor::Session::start()?;
-            let preview = run(request.rgb, request.highlight, &output);
+            let preview = if mode == "--native-lighting-batch" {
+                (|| -> Result<serde_json::Value> {
+                    let mut cases = vec![];
+                    for (name, rgb) in
+                        [("red", [255, 32, 32]), ("green", [32, 255, 32]), ("blue", [32, 64, 255])]
+                    {
+                        let case_path = output.with_extension(format!("{name}.json"));
+                        let report = run_kind(rgb, None, &case_path, true, None)?;
+                        cases.push(serde_json::json!({"color":name,"report":report}));
+                    }
+                    Ok(serde_json::json!({"cases":cases,"visual_confirmation_required":true}))
+                })()
+            } else if mode == "--native-channel-test" {
+                (|| -> Result<serde_json::Value> {
+                    let mut cases = vec![];
+                    for (name, keyboard, underside) in
+                        [("pair-a", [255, 0, 0], [0, 0, 255]), ("pair-b", [0, 0, 255], [255, 0, 0])]
+                    {
+                        let report = run_kind(
+                            underside,
+                            None,
+                            &output.with_extension(format!("{name}.json")),
+                            true,
+                            Some(keyboard),
+                        )?;
+                        cases.push(serde_json::json!({"phase":name,"requested_keyboard":keyboard,"requested_underside":underside,"report":report}));
+                    }
+                    Ok(serde_json::json!({"cases":cases,"visual_confirmation_required":true}))
+                })()
+            } else {
+                run_kind(
+                    request.rgb,
+                    request.highlight,
+                    &output,
+                    mode == "--native-lighting-test",
+                    None,
+                )
+            };
             let release = ownership.stop();
             save(
                 &output.with_extension("batch-result.json"),
@@ -186,7 +322,7 @@ pub fn dispatch() -> Option<Result<()>> {
                 }
                 std::thread::sleep(Duration::from_millis(100));
             }
-            let restored = request.preset.apply(&output.with_extension("restore.json"));
+            let restored = restore(&request, &output.with_extension("restore.json"));
             save(
                 &output,
                 &serde_json::json!({"fallback":true,"firmware_restored":restored.is_ok(),"error":restored.as_ref().err().map(|e|format!("{e:#}"))}),
@@ -304,12 +440,22 @@ mod tests {
                 brightness: 176,
                 underside: false,
                 underside_brightness: 64,
+                underside_color: None,
                 logo: librazer::types::LogoMode::Static,
                 speed: None,
             },
             rgb: [255, 32, 32],
             highlight: None,
+            native_mode: None,
         }
+    }
+    #[test]
+    fn old_requests_remain_compatible_and_unknown_native_modes_are_rejected() {
+        let mut value = serde_json::to_value(request()).unwrap();
+        value.as_object_mut().unwrap().remove("native_mode");
+        assert!(serde_json::from_value::<Request>(value.clone()).unwrap().native_mode.is_none());
+        value["native_mode"] = serde_json::json!("Test");
+        assert!(serde_json::from_value::<Request>(value).is_err());
     }
     #[test]
     fn auxiliary_requires_recoverable_static_lighting() {

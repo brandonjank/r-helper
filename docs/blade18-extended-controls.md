@@ -227,6 +227,16 @@ test AC switching with the intended lighting owner selected. Privileged takeover
 normal exit restoration and hidden sleep/wake lighting passed. Keep auxiliary
 LampArray previews experimental until mapping and visible restoration are fixed.
 
+## Native underside mapping completed
+
+The native seven-row matrix now has physically confirmed independent keyboard and
+underside RGB, integrated into Static lighting presets and named/AC/battery
+profiles. The paired red/blue tests and integrated blue-keyboard/red-underside
+preset passed; original lighting, firmware mode and vendor services restored.
+See [native protocol, controls and validation limits](blade18-lighting.md#independent-native-underside-rgb--verified-2026-10-14).
+The Windows LampArray preview above remains experimental and is not the working
+underside RGB path. Starlight/Ripple and Fn/gaming physical checks remain open.
+
 ## Primary protocol sources
 
 - [Razer model-711 task bundle](https://apps.razer.com/synapse/products/711/mw/6737.097a717c0f79e9e4ca4b.js): actual model Fn/gaming callers.

@@ -54,12 +54,18 @@ pub struct Preset {
     pub brightness: u8,
     pub underside: bool,
     pub underside_brightness: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub underside_color: Option<[u8; 3]>,
     pub logo: crate::types::LogoMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speed: Option<u8>,
 }
 impl Preset {
     pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.underside_color.is_none() || self.style == Style::Static,
+            "Independent underside color requires Static keyboard lighting"
+        );
         ensure!(self.keys.len() == 114, "Keyboard map must contain 6 × 19 colors");
         if let Some(speed) = self.speed {
             ensure!(
@@ -96,6 +102,24 @@ impl Preset {
         p
     }
     pub fn capture(s: &Lighting, logo: crate::types::LogoMode) -> Result<Self> {
+        if super::native::active() {
+            if let Some(mut preset) = LAST
+                .lock()
+                .map_err(|_| anyhow::anyhow!("Lighting cache unavailable"))?
+                .clone()
+                .filter(|p| p.underside_color.is_some())
+            {
+                preset.brightness = s.keyboard_brightness;
+                preset.underside = s.underside;
+                preset.underside_brightness = s.underside_brightness;
+                preset.logo = logo;
+                ensure!(
+                    preset.matches(s),
+                    "Lighting changed outside R-Helper; native pixels cannot be captured"
+                );
+                return Ok(preset);
+            }
+        }
         let d = &s.keyboard_effect;
         if d.get(2) == Some(&8) {
             let mut p=LAST.lock().map_err(|_|anyhow::anyhow!("Lighting cache unavailable"))?.clone().or_else(cached).filter(|p|p.style==Style::PerKey).context("External Chroma pixels cannot be captured; apply an R-Helper firmware effect first")?;
@@ -134,6 +158,7 @@ impl Preset {
             brightness: s.keyboard_brightness,
             underside: s.underside,
             underside_brightness: s.underside_brightness,
+            underside_color: None,
             logo,
             speed: if matches!(
                 style,
@@ -165,6 +190,13 @@ impl Preset {
             && s.underside_brightness == self.underside_brightness
     }
     fn write(&self, device: &Device) -> Result<()> {
+        super::native::mode_write(
+            device,
+            if self.underside_color.is_some() { NativeMode::Driver } else { NativeMode::Firmware },
+        )?;
+        if self.underside_color.is_some() {
+            write(device, Change::Underside(false))?;
+        }
         c::send_command(device, 0x0f02, &self.packet())?;
         if self.style == Style::PerKey {
             for row in 0..6 {
@@ -177,8 +209,11 @@ impl Preset {
         }
         c::set_keyboard_brightness(device, self.brightness)?;
         c::set_logo_mode(device, self.logo)?;
-        write(device, Change::Underside(self.underside))?;
         write(device, Change::UndersideBrightness(self.underside_brightness))?;
+        if let Some(color) = self.underside_color {
+            super::native::write_static_frame(device, self.color, color)?;
+        }
+        write(device, Change::Underside(self.underside))?;
         Ok(())
     }
     pub fn apply(&self, path: &Path) -> Result<Lighting> {
@@ -191,6 +226,9 @@ impl Preset {
         // For CustomFrame, the caller must retain the last applied R-Helper map
         // for recovery; never pretend effect metadata backs up the pixels.
         let recovery = Self::capture(&before, logo).ok();
+        if self.underside_color.is_some() {
+            super::native::arm(recovery.as_ref(), super::native::mode_on(&device)?)?;
+        }
         super::super::journal(
             &mut file,
             &serde_json::json!({"model":"RZ09-0529","operation":"lighting_preset","original":before,"recovery":recovery,"requested":self}),
@@ -224,6 +262,7 @@ impl Preset {
             return Err(error.context("Lighting recovery failed"));
         }
         if result.is_ok() {
+            super::native::set_active(self.underside_color.is_some());
             *LAST.lock().map_err(|_| anyhow::anyhow!("Lighting cache unavailable"))? =
                 Some(self.clone());
             persist(self)

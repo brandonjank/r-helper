@@ -21,6 +21,7 @@ impl Default for BatchUi {
                 brightness: 176,
                 underside: false,
                 underside_brightness: 64,
+                underside_color: None,
                 logo: LogoMode::Static,
                 speed: None,
             },
@@ -122,7 +123,7 @@ impl BladeApp {
         super::view::card(ui, "Keyboard effects + lighting profiles", |ui| {
             ui.add_enabled_ui(enabled,|ui|{
                 egui::ComboBox::from_id_salt("full_keyboard_effect").selected_text(self.batch.draft.style.label()).show_ui(ui,|ui|{
-                    for style in [Style::Off,Style::Static,Style::Breathing,Style::DualBreathing,Style::WaveLeft,Style::WaveRight,Style::Reactive,Style::Starlight,Style::Ripple,Style::PerKey]{if ui.selectable_value(&mut self.batch.draft.style,style,style.label()).changed(){self.batch.draft.speed=None;}}
+                    for style in [Style::Off,Style::Static,Style::Breathing,Style::DualBreathing,Style::WaveLeft,Style::WaveRight,Style::Reactive,Style::Starlight,Style::Ripple,Style::PerKey]{if ui.selectable_value(&mut self.batch.draft.style,style,style.label()).changed(){self.batch.draft.speed=None;if style!=Style::Static{self.batch.draft.underside_color=None;}}}
                 });
                 ui.horizontal(|ui|{ui.label("Color");ui.color_edit_button_srgb(&mut self.batch.draft.color);if matches!(self.batch.draft.style,Style::DualBreathing|Style::Starlight|Style::PerKey){ui.label("Second");ui.color_edit_button_srgb(&mut self.batch.draft.second);}});
                 let timings:Vec<(&str,u8)>=match self.batch.draft.style {Style::Reactive=>vec![("Short",1),("Medium",2),("Long",3),("Longest",4)],Style::Starlight=>vec![("Short",1),("Medium",2),("Long",3)],_=>vec![]};
@@ -135,11 +136,16 @@ impl BladeApp {
                 }
                 ui.add(egui::Slider::new(&mut self.batch.draft.brightness,0..=255).text("Keyboard brightness"));
                 ui.checkbox(&mut self.batch.draft.underside,"Underside enabled");
+                if self.batch.draft.style==Style::Static {
+                    let mut independent=self.batch.draft.underside_color.is_some();
+                    if ui.checkbox(&mut independent,"Independent underside color").changed(){self.batch.draft.underside_color=independent.then_some(self.batch.draft.color);}
+                    if let Some(color)=&mut self.batch.draft.underside_color {ui.horizontal(|ui|{ui.label("Underside color");ui.color_edit_button_srgb(color);});ui.small("Requires Take control to pause Razer software. Original lighting returns when control is released.");}
+                }
                 ui.add(egui::Slider::new(&mut self.batch.draft.underside_brightness,0..=255).text("Underside brightness"));
                 ui.horizontal(|ui|{ui.label("Logo");for mode in [LogoMode::Off,LogoMode::Static,LogoMode::Breathing]{ui.selectable_value(&mut self.batch.draft.logo,mode,format!("{mode:?}"));}});
                 if ui.button("Apply lighting preset").clicked(){apply=Some(self.batch.draft.clone());}
                 ui.horizontal_wrapped(|ui|{if ui.button("Save lighting for AC").clicked(){self.settings.lighting_ac=Some(self.batch.draft.clone());save=true;}if ui.button("Save lighting for battery").clicked(){self.settings.lighting_battery=Some(self.batch.draft.clone());save=true;}});
-                ui.small("Preset replaces the keyboard effect. Effects run in firmware; static per-key colors send no recurring frames.");
+                ui.small("Preset replaces the keyboard effect. Static colors send no recurring frames. The logo supports green brightness only.");
             });
         });
         ui.add_space(8.0);

@@ -277,7 +277,7 @@ mod native {
                 serde_json::to_vec(&serde_json::json!({"errors":errors}))?,
             );
         };
-        let result = restore(record);
+        let result = restore_owned(record, path);
         unsafe {
             let _ = ReleaseMutex(mutex.0);
         }
@@ -345,6 +345,20 @@ fn pause(record: &Record) -> Vec<String> {
         }
     }
     errors
+}
+fn restore_owned(record: &Record, path: &Path) -> Result<()> {
+    record.validate()?;
+    let lighting =
+        librazer::blade18::lighting::restore_native_owner(&path.with_extension("native.json"));
+    let vendor = restore(record);
+    match (lighting, vendor) {
+        (Ok(()), Ok(())) => Ok(()),
+        (lighting, vendor) => anyhow::bail!(
+            "Restoration: lighting={:?}; Razer software={:?}",
+            lighting.err(),
+            vendor.err()
+        ),
+    }
 }
 fn restore(record: &Record) -> Result<()> {
     record.validate()?;
@@ -427,7 +441,11 @@ impl Session {
         ensure!(librazer::diagnostics::is_target_system(), "Vendor takeover is model scoped");
         let record = capture()?;
         librazer::blade18::lamp_array::release();
-        Self::start_record(record)
+        let session = Self::start_record(record)?;
+        librazer::blade18::lighting::configure_native_owner(Some(
+            session.path.with_extension("native.json"),
+        ))?;
+        Ok(session)
     }
     fn start_record(record: Record) -> Result<Self> {
         record.validate()?;
@@ -468,6 +486,7 @@ impl Session {
         Ok(session)
     }
     pub fn stop(&mut self) -> Result<()> {
+        librazer::blade18::lighting::configure_native_owner(None)?;
         #[cfg(windows)]
         if self.child.try_wait()?.is_none() {
             native::signal(&self.event)?;
@@ -487,7 +506,8 @@ impl Session {
         // immutable, scoped recovery record. Preserve the failed guard evidence.
         ensure!(std::fs::metadata(&self.path)?.len() < 65536, "Vendor recovery too large");
         let record: Record = serde_json::from_slice(&std::fs::read(&self.path)?)?;
-        restore(&record).context("Both vendor recovery guard and parent recovery need attention")
+        restore_owned(&record, &self.path)
+            .context("Both vendor recovery guard and parent recovery need attention")
     }
     pub fn health(&mut self) -> Result<()> {
         ensure!(
@@ -643,7 +663,10 @@ impl Ui {
         self.message = "Restoring Razer software…".into();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let result = session.stop().map(|_| None).map_err(|e| format!("{e:#}"));
+            let result = crate::blade_profiles::operation_lock()
+                .and_then(|_lock| session.stop())
+                .map(|_| None)
+                .map_err(|e| format!("{e:#}"));
             let _ = sender.send(result);
             ctx.request_repaint();
         });

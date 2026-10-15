@@ -35,6 +35,15 @@ impl Packet {
         self.crc = bytes[2..88].iter().fold(0, |crc, byte| crc ^ byte);
         self
     }
+    /// Blade standard-matrix protocol uses transaction FF and the usual XOR CRC.
+    pub(crate) fn blade_matrix_framing(mut self) -> Result<Self> {
+        self.ensure_blade18_access()?;
+        ensure!((self.command_class==3 && matches!(self.command_id,0x0a|0x0b)) || (self.command_class==0 && self.command_id==4),"Not a native lighting command");
+        self.id=0xff;
+        let bytes=bincode::serialize(&self)?;
+        self.crc=bytes[2..88].iter().fold(0,|crc,byte|crc^byte);
+        Ok(self)
+    }
     pub(crate) fn ensure_fan_lab_access(&self) -> Result<()> {
         let command = u16::from_be_bytes([self.command_class, self.command_id]);
         let args = &self.args[..usize::from(self.data_size).min(80)];
@@ -72,6 +81,11 @@ impl Packet {
             0x0f03 => {
                 args.len() == 62 && args[0..2] == [0, 5] && args[2] < 6 && args[3..5] == [0, 18]
             }
+            // Standard matrix encoder: this RB18's Razer driver logs seven
+            // rows. Fixed frame FF, columns 0..18; no variable storage or scan.
+            0x030a => args==[5,0],
+            0x0004 => matches!(args,[0|3,0]),
+            0x030b => args.len()==70 && args[0]==0xff && args[1]<=6 && args[2..4]==[0,18] && args[61..].iter().all(|v|*v==0),
             0x0300 if matches!(args, [1, 38, 0 | 1]) => true,
             0x0303 => matches!(args, [1, 38, _]),
             0x0300 => matches!(args, [1, 4, 0 | 1]),
@@ -262,6 +276,27 @@ impl TryFrom<&[u8]> for Packet {
 
 #[cfg(test)]
 mod diagnostic_tests {
+    #[test]
+    fn standard_blade_matrix_framing_is_scoped_and_bounded() {
+        let mut row=[0;70];row[..4].copy_from_slice(&[0xff,6,0,18]);
+        row[4..61].fill(128);
+        let packet=super::Packet::new(0x030b,&row).blade_matrix_framing().unwrap();
+        assert_eq!(packet.id,0xff);
+        let bytes=bincode::serialize(&packet).unwrap();
+        assert_eq!(packet.crc,bytes[2..88].iter().fold(0,|crc,byte|crc^byte));
+        assert!(super::Packet::new(0x030a,&[5,0]).blade_matrix_framing().is_ok());
+        for mode in [0,3] {assert!(super::Packet::new(0x0004,&[mode,0]).blade_matrix_framing().is_ok());}
+        assert!(super::Packet::new(0x0004,&[1,0]).ensure_blade18_access().is_err());
+        assert!(super::Packet::new(0x0004,&[3,1]).ensure_blade18_access().is_err());
+        assert!(super::Packet::new(0x0004,&[3,0]).ensure_diagnostic_query().is_err());
+        for (offset,value) in [(0,0),(1,7),(2,1),(3,19),(61,1)]{
+            let mut bad=row;bad[offset]=value;
+            assert!(super::Packet::new(0x030b,&bad).ensure_blade18_access().is_err());
+        }
+        assert!(super::Packet::new(0x030a,&[5,1]).ensure_blade18_access().is_err());
+        assert!(super::Packet::new(0x0d01,&[0,1,40]).blade_matrix_framing().is_err());
+        assert!(super::Packet::new(0x030b,&row).ensure_diagnostic_query().is_err());
+    }
     #[test]
     fn underside_color_table_remains_a_fixed_read_only_query() {
         let mut data=[0;80];data[..2].copy_from_slice(&[1,38]);
@@ -474,7 +509,7 @@ mod diagnostic_tests {
             (0x0d07, vec![1, 1, 4]),
             (0x0d02, vec![1, 1, 3, 0]),
             (0x0d01, vec![0, 1, 56]),
-            (0x0004, vec![3, 0]),
+            (0x0004, vec![1, 0]),
             (0x070f, vec![2]),
         ] {
             assert!(Packet::new(cmd, &args).ensure_blade18_access().is_err());
@@ -615,7 +650,7 @@ mod diagnostic_tests {
             (0x0206, vec![1, 2]),
             (0x0008, vec![3, 0, 0, 0]),
             (0x0713, vec![1, 1, 1]),
-            (0x0004, vec![3, 0]),
+            (0x0004, vec![2, 0]),
             (0x000b, vec![1]),
         ] {
             assert!(Packet::new(command, &args).ensure_blade18_access().is_err());

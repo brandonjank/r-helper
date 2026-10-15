@@ -16,7 +16,7 @@ BIOS 2.01; tested 2026-10-14.
 | Control | Getter | Setter | Result |
 | --- | --- | --- | --- |
 | Startup animation | `0f98 [0]`, response byte is **disableAnimation** | `0f18 [0, disabled]` | On → Off → On readback passed. Profile 0 comes from the model middleware's actual caller. Boot appearance has not been observed. |
-| Underside/vapor-chamber light | `0380 [0,38,0]` | `0300 [1,38,enabled]` | Off → On → Off readback passed. Keyboard/logo effects and brightness, plus the other switch, stayed unchanged. Physical visual confirmation remains open. |
+| Underside/vapor-chamber light | `0380 [0,38,0]` | `0300 [1,38,enabled]` | Off → On → Off readback passed. Keyboard/logo effects and brightness, plus the other switch, stayed unchanged. Owner confirmed all underside LEDs illuminate blue; later native frames confirmed independent RGB (see below). |
 
 Both switches also passed through the native app UI, with independent diagnostics
 confirming the changed controller setting. Original settings were restored:
@@ -26,7 +26,7 @@ Underside brightness uses getter `0383 [1,38,0]` and setter
 `0303 [1,38,brightness]`. A 64 → 56 → 64 test passed, preserving light enable,
 startup animation, keyboard and logo settings. Its standard RGB getter
 `0381 [0,38,0,0,0]` returned NotSupported. Brightness is independent of the
-keyboard's 176/255 value; this does not establish independent underside RGB.
+keyboard's 176/255 value. Independent RGB was subsequently established through the native matrix, not this getter.
 
 The model's Chroma inventory getter `0f80` returns these five-byte entries:
 
@@ -68,7 +68,7 @@ blue fading in/out without other lights changing. The pre-test static blue was
 restored afterward.
 
 Region 38 has independently verified enable and brightness controls, but is absent from the
-Chroma region list. This does not establish independent underside RGB colors.
+Chroma region list. Independent RGB is accessed through native row 6, described below.
 The old standard RGB getters for IDs 4/5 still return NotSupported.
 
 ## Repeating or recovering the switch test
@@ -120,3 +120,45 @@ short process CPU check, not a GPU-activity or battery-energy measurement.
 
 Vendor bundles are research material only; their implementation is not copied
 into the repository.
+
+## Independent native underside RGB — verified 2026-10-14
+
+The actual model-711 lighting driver logs describe seven rows by 19 columns.
+Rows 0–5 address the keyboard; row 6 addresses the underside. In driver mode 3,
+the owner confirmed both paired phases: red keyboard/blue underside, then blue
+keyboard/red underside. Both zones use ordinary RGB byte order.
+
+Use **Keyboard effects + lighting profiles → Static → Independent underside
+color**, choose the underside color, and apply the preset. Enable **Underside
+enabled** and its brightness as desired. First use **Take control now** to pause
+conflicting Razer software. AC/battery lighting presets and named profiles retain
+the separate color. Older profile files default to the existing firmware effects.
+Independent color currently supports Static keyboard lighting only. Changing to
+an animated keyboard effect returns to the firmware lighting path.
+
+Native writes use driver-mode setter `0004 [3,0]`, seven `030b` packets with
+70-byte payloads `[ff,row,0,18,19 RGB triples,9 zero bytes]`, and activation
+`030a [5,0]`. These packets use transaction `ff` and the model's XOR checksum.
+The underside power gate remains `0300 [1,38,enabled]`. It is disabled while
+preparing the frame and enabled after the requested pixels are loaded, preventing
+the earlier blue brightness ramp. The owner confirmed this integrated preset test
+works with a blue keyboard and red underside.
+
+Effect metadata does not expose the native pixel buffer. Accepted packets and
+unchanged unrelated settings are verified electronically; actual RGB mapping is
+confirmed by observation. R-Helper retains its own last applied native preset for
+capture rather than treating firmware metadata as a pixel backup.
+
+Before entering native mode, an immutable original-lighting record is synced to
+disk alongside the existing ownership recovery record. The independent guard
+restores firmware mode and original lighting before restarting Razer software on
+release or owner exit. The integrated hardware test passed profile capture/JSON
+roundtrip, exact original-lighting restoration, firmware-mode restoration, and
+vendor-service restoration. Native owner-crash restoration uses this same guard
+path; it has not yet had a separate physical crash test. No repeated RGB frames or
+lighting polling loop is added. The full automated suite passed 73 tests.
+
+Windows LampArray's 18 Branding lamps did not independently recolor the underside
+in the observed tests. Keep that preview experimental; native row 6 is the verified
+route. The logo remains a green-only light with Off/Static/Breathing and brightness,
+not an RGB zone. Raw machine logs and diagnostic journals remain local.

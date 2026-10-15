@@ -8,7 +8,10 @@ based on [Fatalution/r-helper](https://github.com/Fatalution/r-helper).
 The 0.6.0 test candidate adds verified Fn-primary/gaming controls, Starlight/Ripple,
 effect timing choices, a Windows lighting map and a timed preview for 18 newly
 discovered auxiliary RGB lamps. It also adds reversible Razer-software takeover;
-the privileged service test and physical auxiliary-zone mapping remain pending.
+privileged takeover, sleep/wake, and exit restoration have passed. Native frames
+now provide physically verified independent static keyboard and underside RGB,
+with separate colors saved in profiles and automatic restoration on release.
+The Windows auxiliary preview remains experimental.
 See [extended controls and the return-to-desk test batch](docs/blade18-extended-controls.md).
 
 Version 0.5.0 adds firmware keyboard effects and experimental per-key colors,

@@ -284,6 +284,7 @@ mod tests {
                 brightness: 176,
                 underside: false,
                 underside_brightness: 64,
+                underside_color: None,
                 logo: librazer::types::LogoMode::Static,
             },
             display: librazer::display::Profile {
@@ -294,6 +295,22 @@ mod tests {
             },
             executable: "game.exe".into(),
         }
+    }
+    #[test]
+    fn independent_underside_profiles_roundtrip_and_reject_animated_keyboard() {
+        let mut p = named();
+        p.lighting.underside_color = Some([255, 0, 0]);
+        p.lighting.underside = true;
+        let encoded = serde_json::to_vec(&p).unwrap();
+        let decoded: Named = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(decoded.lighting.underside_color, Some([255, 0, 0]));
+        decoded.lighting.validate().unwrap();
+        p.lighting.style = librazer::blade18::lighting::Style::WaveLeft;
+        assert!(p.lighting.validate().is_err());
+        let mut legacy = serde_json::to_value(named()).unwrap();
+        legacy["lighting"].as_object_mut().unwrap().remove("underside_color");
+        let legacy: Named = serde_json::from_value(legacy).unwrap();
+        assert!(legacy.lighting.underside_color.is_none());
     }
     #[test]
     fn imported_profiles_cannot_enable_automation_and_maximum_export_roundtrips() {
