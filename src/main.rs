@@ -12,6 +12,7 @@ mod blade_platform;
 mod blade_policy;
 mod blade_power;
 mod blade_profiles;
+mod blade_sleep;
 mod blade_updates;
 mod blade_vendor;
 mod cli;
