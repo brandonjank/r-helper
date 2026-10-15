@@ -7,6 +7,8 @@ mod blade_curves;
 mod blade_desktop;
 mod blade_display;
 mod blade_policy;
+mod blade_platform;
+mod blade_gpu;
 mod blade_power;
 mod blade_profiles;
 mod blade_vendor;
@@ -1314,6 +1316,11 @@ fn set_windows_app_id() {
 fn set_windows_app_id() {}
 
 fn main() -> Result<(), eframe::Error> {
+    if let Some(result)=blade_gpu::dispatch() {if let Err(error)=result{eprintln!("GPU preview: {error:#}");std::process::exit(1);}return Ok(());}
+    if let Some(result)=blade_platform::dispatch() {
+        if let Err(error)=result {eprintln!("Platform diagnostics: {error:#}");std::process::exit(1);}
+        return Ok(());
+    }
     if let Some(result) = blade_auxiliary::dispatch() {
         if let Err(error) = result {
             eprintln!("Auxiliary lighting: {error:#}");

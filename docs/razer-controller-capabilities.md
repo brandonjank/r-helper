@@ -1,9 +1,11 @@
 # Blade 18 controller capability inventory
 
-See the [0.6.0 extended-controls candidate](blade18-extended-controls.md) for
-Fn-primary and gaming switches, Starlight/Ripple, additional timing choices and a
-separate standard Windows lighting interface with 18 auxiliary RGB lamps. Physical
-zone mapping and privileged vendor-software takeover still need owner tests.
+Current status is in the [autonomous discovery/implementation batch](blade18-autonomous-batch.md).
+Independent native underside RGB and privileged Razer takeover were physically
+validated before this batch. New per-cell maps and GPU previews await the elevated
+batch/physical mapping checks. The [extended-controls history](blade18-extended-controls.md)
+retains earlier experiments. Older unconfirmed statements below are historical;
+use the current batch and lighting evidence for present capability status.
 
 See the [controller discovery pass](blade18-discovery.md) for newly verified
 charger telemetry, the charge-once bit path, unsupported PWM getters and the

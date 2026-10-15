@@ -509,6 +509,15 @@ impl Session {
         restore_owned(&record, &self.path)
             .context("Both vendor recovery guard and parent recovery need attention")
     }
+    pub(crate) fn recovery_path(&self) -> &Path {
+        &self.path
+    }
+    /// Diagnostic only: terminate this session's own guard to exercise parent fallback.
+    pub(crate) fn test_guard_exit(&mut self) -> Result<()> {
+        self.child.kill()?;
+        self.child.wait()?;
+        Ok(())
+    }
     pub fn health(&mut self) -> Result<()> {
         ensure!(
             self.child.try_wait()?.is_none(),

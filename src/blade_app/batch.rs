@@ -2,6 +2,8 @@ use super::*;
 use blade18::lighting::{Preset, Style};
 pub(super) struct BatchUi {
     pub draft: Preset,
+    pub display_mode: Option<librazer::display::Profile>,
+    pub gpu_offsets: crate::blade_gpu::Offsets,
     name: String,
     selected: usize,
     transfer: String,
@@ -13,6 +15,8 @@ pub(super) struct BatchUi {
 impl Default for BatchUi {
     fn default() -> Self {
         Self {
+            display_mode: None,
+            gpu_offsets: crate::blade_gpu::Offsets::default(),
             draft: Preset {
                 style: Style::Static,
                 color: [32, 64, 255],
@@ -22,6 +26,7 @@ impl Default for BatchUi {
                 underside: false,
                 underside_brightness: 64,
                 underside_color: None,
+                underside_keys: None,
                 logo: LogoMode::Static,
                 speed: None,
             },
@@ -87,7 +92,7 @@ impl BladeApp {
             let remaining = 15u64.saturating_sub(start.elapsed().as_secs());
             let mut keep = false;
             let mut revert = false;
-            egui::Window::new("Keep this refresh rate?")
+            egui::Window::new("Keep this display mode?")
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
@@ -103,7 +108,7 @@ impl BladeApp {
                 self.batch.pending = None;
                 self.batch_job(
                     ctx,
-                    if keep { "Keep refresh rate" } else { "Restore refresh rate" },
+                    if keep { "Keep display mode" } else { "Restore display mode" },
                     move || {
                         crate::blade_display::finish(&path, keep)
                             .map(|s| serde_json::json!({"display_controls":s}))
@@ -123,7 +128,7 @@ impl BladeApp {
         super::view::card(ui, "Keyboard effects + lighting profiles", |ui| {
             ui.add_enabled_ui(enabled,|ui|{
                 egui::ComboBox::from_id_salt("full_keyboard_effect").selected_text(self.batch.draft.style.label()).show_ui(ui,|ui|{
-                    for style in [Style::Off,Style::Static,Style::Breathing,Style::DualBreathing,Style::WaveLeft,Style::WaveRight,Style::Reactive,Style::Starlight,Style::Ripple,Style::PerKey]{if ui.selectable_value(&mut self.batch.draft.style,style,style.label()).changed(){self.batch.draft.speed=None;if style!=Style::Static{self.batch.draft.underside_color=None;}}}
+                    for style in [Style::Off,Style::Static,Style::Breathing,Style::DualBreathing,Style::WaveLeft,Style::WaveRight,Style::Reactive,Style::Starlight,Style::Ripple,Style::PerKey]{if ui.selectable_value(&mut self.batch.draft.style,style,style.label()).changed(){self.batch.draft.speed=None;if !matches!(style,Style::Static|Style::PerKey){self.batch.draft.underside_color=None;self.batch.draft.underside_keys=None;}}}
                 });
                 ui.horizontal(|ui|{ui.label("Color");ui.color_edit_button_srgb(&mut self.batch.draft.color);if matches!(self.batch.draft.style,Style::DualBreathing|Style::Starlight|Style::PerKey){ui.label("Second");ui.color_edit_button_srgb(&mut self.batch.draft.second);}});
                 let timings:Vec<(&str,u8)>=match self.batch.draft.style {Style::Reactive=>vec![("Short",1),("Medium",2),("Long",3),("Longest",4)],Style::Starlight=>vec![("Short",1),("Medium",2),("Long",3)],_=>vec![]};
@@ -136,10 +141,19 @@ impl BladeApp {
                 }
                 ui.add(egui::Slider::new(&mut self.batch.draft.brightness,0..=255).text("Keyboard brightness"));
                 ui.checkbox(&mut self.batch.draft.underside,"Underside enabled");
-                if self.batch.draft.style==Style::Static {
+                if matches!(self.batch.draft.style,Style::Static|Style::PerKey) {
                     let mut independent=self.batch.draft.underside_color.is_some();
-                    if ui.checkbox(&mut independent,"Independent underside color").changed(){self.batch.draft.underside_color=independent.then_some(self.batch.draft.color);}
+                    if ui.checkbox(&mut independent,"Independent underside color").changed(){self.batch.draft.underside_color=independent.then_some(self.batch.draft.color);if !independent{self.batch.draft.underside_keys=None;}}
                     if let Some(color)=&mut self.batch.draft.underside_color {ui.horizontal(|ui|{ui.label("Underside color");ui.color_edit_button_srgb(color);});ui.small("Requires Take control to pause Razer software. Original lighting returns when control is released.");}
+                }
+                if let Some(color)=self.batch.draft.underside_color {
+                    let mut mapped=self.batch.draft.underside_keys.is_some();
+                    if ui.checkbox(&mut mapped,"Paint underside cells · experimental").changed(){self.batch.draft.underside_keys=mapped.then(||vec![color;19]);}
+                    if let Some(keys)=&mut self.batch.draft.underside_keys {
+                        ui.horizontal(|ui|{if ui.button("Fill underside").clicked(){keys.fill(color);}if ui.button("Alternate underside cells").clicked(){for(i,key)in keys.iter_mut().enumerate(){*key=if i%2==0{color}else{self.batch.draft.second};}}});
+                        ui.horizontal_wrapped(|ui|{for(index,key)in keys.iter_mut().enumerate(){if ui.add_sized([16.0,16.0],egui::Button::new("").fill(egui::Color32::from_rgb(key[0],key[1],key[2]))).on_hover_text(format!("Native cell {} · physical position unconfirmed",index+1)).clicked(){*key=color;}}});
+                        ui.small("Native frame has 19 cells. Physical LED order and unused cells still need observation.");
+                    }
                 }
                 ui.add(egui::Slider::new(&mut self.batch.draft.underside_brightness,0..=255).text("Underside brightness"));
                 ui.horizontal(|ui|{ui.label("Logo");for mode in [LogoMode::Off,LogoMode::Static,LogoMode::Breathing]{ui.selectable_value(&mut self.batch.draft.logo,mode,format!("{mode:?}"));}});

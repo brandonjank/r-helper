@@ -181,6 +181,138 @@ fn run_kind(
     )
 }
 
+fn native_maintenance(
+    path: &Path,
+    output: &Path,
+    owner_exit: bool,
+    guard_exit: bool,
+) -> Result<()> {
+    let original = Preset::capture(&blade18::lighting::status()?, blade18::status()?.logo)?;
+    let mut ownership = crate::blade_vendor::Session::start()?;
+    let recovery = ownership.recovery_path().to_path_buf();
+    let applied = (|| -> Result<serde_json::Value> {
+        let mut preset = original.clone();
+        preset.style = Style::Static;
+        preset.speed = None;
+        preset.color = [0, 0, 255];
+        preset.underside_color = Some([255, 0, 0]);
+        preset.underside_keys = None;
+        preset.underside = true;
+        preset.underside_brightness = 200;
+        let mut cases = vec![];
+        for index in 0..if owner_exit || guard_exit { 1 } else { 4 } {
+            match index {
+                1 => {
+                    preset.style = Style::PerKey;
+                    for (i, key) in preset.keys.iter_mut().enumerate() {
+                        *key = if i / 19 % 2 == 0 { [0, 0, 255] } else { [255, 64, 0] };
+                    }
+                    preset.underside_keys = Some(
+                        (0..19)
+                            .map(|i| match i % 3 {
+                                0 => [255, 0, 0],
+                                1 => [0, 255, 0],
+                                _ => [0, 0, 255],
+                            })
+                            .collect(),
+                    );
+                }
+                2 => {
+                    preset.brightness = 0;
+                    preset.underside = false;
+                }
+                3 => {
+                    preset = original.clone();
+                    preset.style = Style::Static;
+                    preset.speed = None;
+                    preset.underside_color = None;
+                    preset.underside_keys = None;
+                }
+                _ => {}
+            }
+            preset.apply(&output.with_extension(format!("case-{index}.json")))?;
+            let captured = Preset::capture(&blade18::lighting::status()?, blade18::status()?.logo)?;
+            ensure!(captured == preset, "Native case {index} capture mismatch");
+            let decoded: Preset = serde_json::from_slice(&serde_json::to_vec(&captured)?)?;
+            ensure!(decoded == preset, "Native case {index} profile roundtrip mismatch");
+            let mode = blade18::lighting::native_mode()?;
+            ensure!(
+                mode == if preset.underside_color.is_some() {
+                    blade18::lighting::NativeMode::Driver
+                } else {
+                    blade18::lighting::NativeMode::Firmware
+                },
+                "Native case {index} mode mismatch"
+            );
+            cases.push(serde_json::json!({"case":index,"metadata_verified":true,"profile_roundtrip":true,"mode":mode,"physical_pixels_verified":false}));
+            std::thread::sleep(Duration::from_secs(2));
+        }
+        Ok(serde_json::json!({"cases":cases}))
+    })();
+    if owner_exit && applied.is_ok() {
+        save(
+            output,
+            &serde_json::json!({"owner_exit":true,"recovery":recovery,"applied":applied.as_ref().ok()}),
+        )?;
+        std::mem::forget(ownership); // Normal process exit without Drop simulates owner loss.
+        return Ok(());
+    }
+    if guard_exit && applied.is_ok() {
+        ownership.test_guard_exit()?;
+    }
+    let released = ownership.stop();
+    let restored = Preset::capture(&blade18::lighting::status()?, blade18::status()?.logo)?;
+    let exact = restored == original
+        && blade18::lighting::native_mode()? == blade18::lighting::NativeMode::Firmware;
+    save(
+        output,
+        &serde_json::json!({"applied":applied.as_ref().ok(),"apply_error":applied.as_ref().err().map(|e|format!("{e:#}")),"restored":released.is_ok()&&exact,"restore_error":released.as_ref().err().map(|e|format!("{e:#}")),"guard_exit":guard_exit,"recovery":recovery}),
+    )?;
+    released?;
+    applied?;
+    ensure!(exact, "Native maintenance original lighting mismatch");
+    if !guard_exit {
+        let owner_output = output.with_extension("owner-exit.json");
+        let mut child = command("--native-owner-exit", path, &owner_output)?.spawn()?;
+        let start = Instant::now();
+        while child.try_wait()?.is_none() {
+            ensure!(start.elapsed() < Duration::from_secs(20), "Owner-exit test still running");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        ensure!(std::fs::metadata(&owner_output)?.len() < 65536, "Owner report too large");
+        let owner: serde_json::Value = serde_json::from_slice(&std::fs::read(&owner_output)?)?;
+        let journal = PathBuf::from(
+            owner["recovery"].as_str().ok_or_else(|| anyhow::anyhow!("Missing owner recovery"))?,
+        );
+        let start = Instant::now();
+        while !journal.with_extension("done").exists() {
+            ensure!(start.elapsed() < Duration::from_secs(20), "Owner recovery did not complete");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let done: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(journal.with_extension("done"))?)?;
+        ensure!(done["ok"] == true, "Owner-exit native recovery failed");
+        ensure!(
+            Preset::capture(&blade18::lighting::status()?, blade18::status()?.logo)? == original,
+            "Owner-exit lighting mismatch"
+        );
+        let fallback_output = output.with_extension("guard-exit.json");
+        native_maintenance(path, &fallback_output, false, true)?;
+        let mut gpu_ownership = crate::blade_vendor::Session::start()?;
+        let gpu_preview = crate::blade_gpu::preview(
+            crate::blade_gpu::Offsets { gpu: -15, vram: 0 },
+            &output.with_extension("gpu-preview.json"),
+        );
+        let gpu_release = gpu_ownership.stop();
+        save(
+            &output.with_extension("complete.json"),
+            &serde_json::json!({"native_cases":4,"owner_exit_restored":true,"guard_exit_fallback_restored":true,"gpu_preview_restored":gpu_preview.is_ok(),"gpu_error":gpu_preview.as_ref().err().map(|e|format!("{e:#}")),"gpu_vendor_restored":gpu_release.is_ok(),"physical_mapping_confirmation_required":true}),
+        )?;
+        gpu_release?;
+        gpu_preview?;
+    }
+    Ok(())
+}
 pub fn dispatch() -> Option<Result<()>> {
     let args = std::env::args().collect::<Vec<_>>();
     let mode = args.get(1)?.as_str();
@@ -193,6 +325,8 @@ pub fn dispatch() -> Option<Result<()>> {
             | "--native-lighting-batch"
             | "--native-channel-test"
             | "--native-profile-test"
+            | "--native-maintenance-batch"
+            | "--native-owner-exit"
             | "--native-lighting-inspect"
     ) {
         return None;
@@ -203,6 +337,16 @@ pub fn dispatch() -> Option<Result<()>> {
         let path = PathBuf::from(&args[2]);
         let output = PathBuf::from(&args[3]);
         let request = load(&path)?;
+        if mode == "--native-maintenance-batch" || mode == "--native-owner-exit" {
+            let result = native_maintenance(&path, &output, mode == "--native-owner-exit", false);
+            if let Err(error) = &result {
+                save(
+                    &output.with_extension("failure.json"),
+                    &serde_json::json!({"completed":false,"error":format!("{error:#}")}),
+                )?;
+            }
+            return result;
+        }
         if mode == "--native-profile-test" {
             let original = Preset::capture(&blade18::lighting::status()?, blade18::status()?.logo)?;
             let mut ownership = crate::blade_vendor::Session::start()?;
@@ -441,6 +585,7 @@ mod tests {
                 underside: false,
                 underside_brightness: 64,
                 underside_color: None,
+                underside_keys: None,
                 logo: librazer::types::LogoMode::Static,
                 speed: None,
             },

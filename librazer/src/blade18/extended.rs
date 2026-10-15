@@ -185,6 +185,7 @@ pub fn inventory() -> Result<serde_json::Value> {
     let mut readings = serde_json::Map::new();
     for (name, command, data) in [
         ("device_mode", 0x0084, vec![0, 0]),
+        ("fan_table_candidate_class0_fan1_curve0",0x0d84,{let mut args=vec![0;80];args[1]=1;args}),
         ("legacy_led_inventory", 0x0389, vec![0; 80]),
         // Shared protocol Get LED Color Table Definition; fixed known underside
         // region only. Its corresponding setter is deliberately not allowed.
@@ -196,6 +197,7 @@ pub fn inventory() -> Result<serde_json::Value> {
         ("fn_primary_persistent", 0x0286, vec![1, 0]),
         ("function_key_swap", 0x02a8, vec![0]),
         ("keyboard_layout", 0x02a4, vec![0]),
+        ("snap_tap_profile_1", 0x02a7, {let mut data=vec![0;15];data[0]=1;data}),
         ("gaming_custom_keys", 0x00dd, vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
         ("gaming_key_selection", 0x00da, vec![1, 0, 0]),
         ("fn_lighting_overlay", 0x0f86, vec![1, 0]),

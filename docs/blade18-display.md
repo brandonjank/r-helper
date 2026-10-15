@@ -62,3 +62,13 @@ Local evidence: `display-inventory-20261014.json`,
 For physical power-switch tests, capture current hardware state with
 `rhelper-diagnostics --capture-state --output state.json` and restore with
 `--restore-state state.json` afterward. Keep saved-profile backups separately.
+
+## Explicit Windows resolution previews
+
+The autonomous batch adds a separate manual Windows resolution/refresh selector.
+It inventories driver-tested modes at the current depth, orientation and scan flags,
+changes only width/height/frequency, and uses an independent timed Keep/Revert guard.
+The live 2560 × 1600 / 60 Hz → 1920 × 1200 / 60 Hz test restored exactly.
+Existing automatic profiles still reject resolution changes. This is not the
+firmware native-panel/DDS/MUX switch and requires no reboot. See the
+[full batch and validation boundaries](blade18-autonomous-batch.md).

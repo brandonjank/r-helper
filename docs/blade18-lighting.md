@@ -162,3 +162,11 @@ Windows LampArray's 18 Branding lamps did not independently recolor the undersid
 in the observed tests. Keep that preview experimental; native row 6 is the verified
 route. The logo remains a green-only light with Off/Static/Breathing and brightness,
 not an RGB zone. Raw machine logs and diagnostic journals remain local.
+
+## Per-cell static maps
+
+The next batch extends independent native color to keyboard Per-key mode and an
+optional 19-cell underside map, both saved in profiles. An underside map requires
+independent color and exactly 19 RGB cells. The logical native row may include
+unused cells; physical ordering is unconfirmed. No animation loop is added.
+See the [autonomous batch](blade18-autonomous-batch.md) for current test status.

@@ -128,6 +128,7 @@ impl Packet {
             0x038e => args.len()==80 && args[..2]==[1,38] && args[2..].iter().all(|v|*v==0),
             0x0286 => matches!(args, [0 | 1, 0]),
             0x02a8 | 0x02a4 => args == [0],
+            0x02a7 => args.len()==15 && args[0]==1 && args[1..].iter().all(|v|*v==0),
             0x00dd => args == [1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             0x00da => args == [1, 0, 0],
             0x0f86 => args == [1, 0],
@@ -142,6 +143,10 @@ impl Packet {
             // Vendor model-711 middleware: fixed-shape capability getters only.
             0x0d80 => args == [0; 80],
             0x0d83 => args == [0; 12],
+            // Shared Razer module declares the 80-byte getter adjacent to the
+            // fan-table setter. Request header is a single, explicitly inferred
+            // class-0 / fan-1 / curve-0 candidate; no selector or class sweep.
+            0x0d84 => args.len()==80 && args[..3]==[0,1,0] && args[3..].iter().all(|v|*v==0),
             0x0d8a | 0x0d8b => args == [0, 0],
             0x0d89 => args == [0, 0],
             0x0d8e | 0x0f98 => args == [0],
@@ -276,6 +281,14 @@ impl TryFrom<&[u8]> for Packet {
 
 #[cfg(test)]
 mod diagnostic_tests {
+    #[test]
+    fn inferred_fan_table_probe_is_read_only_and_exactly_scoped() {
+        let mut args=vec![0;80];args[1]=1;
+        Packet::new(0x0d84,&args).ensure_diagnostic_query().unwrap();
+        assert!(Packet::new(0x0d04,&args).ensure_blade18_access().is_err());
+        for index in [0,1,2,3,79] {let mut invalid=args.clone();invalid[index]=invalid[index].wrapping_add(1);assert!(Packet::new(0x0d84,&invalid).ensure_diagnostic_query().is_err());}
+        assert!(Packet::new(0x0d84,&args[..3]).ensure_diagnostic_query().is_err());
+    }
     #[test]
     fn standard_blade_matrix_framing_is_scoped_and_bounded() {
         let mut row=[0;70];row[..4].copy_from_slice(&[0xff,6,0,18]);

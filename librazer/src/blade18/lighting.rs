@@ -150,6 +150,7 @@ pub fn keyboard_effect(
         };
         if preset.style != Style::Static {
             preset.underside_color = None;
+            preset.underside_keys = None;
         }
         return preset.apply(journal_path);
     }

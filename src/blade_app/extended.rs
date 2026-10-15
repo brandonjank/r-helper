@@ -10,6 +10,10 @@ impl BladeApp {
         let mut requested = None;
         let mut run_batch = false;
         let mut inspect = false;
+        let mut platform = false;
+        let mut gpu_preview = false;
+        let mut display_read = false;
+        let mut display_preview = None;
         let mut read_lamps = false;
         let mut preview_lamps = false;
         super::view::card(ui, "Keyboard behavior", |ui| {
@@ -49,7 +53,9 @@ impl BladeApp {
         });
         super::view::card(ui, "Auxiliary RGB lighting · experimental", |ui| {
             if blade18::lamp_array::preview_active() {
-                ui.label("Auxiliary preview active · automatic restoration after test window closes");
+                ui.label(
+                    "Auxiliary preview active · automatic restoration after test window closes",
+                );
                 ctx.request_repaint_after(std::time::Duration::from_secs(1));
             } else {
                 ui.small("Auxiliary preview inactive");
@@ -73,7 +79,7 @@ impl BladeApp {
                 });
                 ui.horizontal_wrapped(|ui|{ui.checkbox(&mut self.lamp_highlight,"Highlight one lamp in orange");if self.lamp_highlight{ui.add(egui::DragValue::new(&mut self.lamp_index).range(1..=18).prefix("Lamp "));}});
                 if ui.button("Open Windows lighting settings").clicked(){let _=std::process::Command::new("explorer.exe").arg("ms-settings:personalization-lighting").spawn();}
-                super::view::hint(ui,"The logo is green-only. The 18 reported auxiliary lamps remain unmapped. This test requires a static keyboard effect, temporarily powers the underside at a brighter setting, opens a test window, then restores your saved lighting and underside power. R-Helper stays hidden in the tray afterward. Physical RGB behavior is unverified.");
+                super::view::hint(ui,"The logo is green-only. Use the native underside color controls above for verified RGB. The Windows auxiliary lamps remain unmapped. This test requires a static keyboard effect, temporarily powers the underside at a brighter setting, opens a test window, then restores your saved lighting and underside power. R-Helper stays hidden in the tray afterward. Physical RGB behavior is unverified.");
             });
         });
         if read_lamps {
@@ -92,7 +98,151 @@ impl BladeApp {
             let color = self.lamp_color;
             let highlight = self.lamp_highlight.then_some(self.lamp_index);
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-            self.batch_job(ctx,"Test auxiliary RGB and restore lighting",move||crate::blade_auxiliary::run(color,highlight,&blade_profiles::journal_path("auxiliary-test")?));
+            self.batch_job(ctx, "Test auxiliary RGB and restore lighting", move || {
+                crate::blade_auxiliary::run(
+                    color,
+                    highlight,
+                    &blade_profiles::journal_path("auxiliary-test")?,
+                )
+            });
+        }
+        super::view::card(ui, "Display mode preview", |ui| {
+            if ui.add_enabled(enabled, egui::Button::new("Read supported display modes")).clicked()
+            {
+                display_read = true;
+            }
+            if let Some(info) = &self.display {
+                let current = self.batch.display_mode.as_ref().unwrap_or(&info.current);
+                egui::ComboBox::from_id_salt("manual_display_mode")
+                    .selected_text(format!(
+                        "{} × {} · {} Hz",
+                        current.width, current.height, current.hz
+                    ))
+                    .show_ui(ui, |ui| {
+                        for mode in &info.modes {
+                            ui.selectable_value(
+                                &mut self.batch.display_mode,
+                                Some(mode.clone()),
+                                format!("{} × {} · {} Hz", mode.width, mode.height, mode.hz),
+                            );
+                        }
+                    });
+                if ui
+                    .add_enabled(
+                        enabled && !crate::blade_display::is_pending(),
+                        egui::Button::new("Preview display mode"),
+                    )
+                    .clicked()
+                {
+                    display_preview =
+                        Some(self.batch.display_mode.clone().unwrap_or(info.current.clone()));
+                }
+            }
+            ui.small("Windows resolution + refresh rate, with Keep/Revert. This does not switch the panel's firmware mode. After keeping a new resolution, save refresh profiles again.");
+        });
+        if display_read {
+            self.batch_job(ctx, "Read display modes", || {
+                Ok(serde_json::json!({"display_controls":librazer::display::inventory()?}))
+            });
+        }
+        if let Some(target) = display_preview {
+            self.batch_job(ctx, "Preview display mode", move || {
+                crate::blade_display::begin_mode(&target)
+            });
+        }
+        super::view::card(ui, "Platform capabilities", |ui| {
+            if ui
+                .add_enabled(
+                    enabled,
+                    egui::Button::new("Read firmware, panel + tuning availability"),
+                )
+                .clicked()
+            {
+                platform = true;
+            }
+            ui.small("On demand only. GPU diagnostics can wake the NVIDIA GPU. Installed Razer helpers are optional and isolated.");
+            if let Some(report) = &self.platform_report {
+                let native = &report["native"];
+                if let Some(panel) = native["GetBladeLEDPanelProducerShortName"]["value"].as_str() {
+                    ui.label(format!("Panel maker: {panel}"));
+                }
+                if let Some(firmware) = native["GetBladeFirmwareInfo"]["value"].as_object() {
+                    for (name, value) in firmware {
+                        ui.label(format!("{name}: {}", value.as_str().unwrap_or("unknown")));
+                    }
+                }
+                if let Some(gpus) = report["gpu"]["gpus"].as_array() {
+                    for gpu in gpus {
+                        ui.label(format!(
+                            "{} · driver {}",
+                            gpu["name"].as_str().unwrap_or("NVIDIA"),
+                            gpu["driver_version"].as_str().unwrap_or("unknown")
+                        ));
+                        ui.label(format!(
+                            "GPU power limit: {} W · range {}–{} W",
+                            gpu["power.limit"].as_str().unwrap_or("unavailable"),
+                            gpu["power.min_limit"].as_str().unwrap_or("unavailable"),
+                            gpu["power.max_limit"].as_str().unwrap_or("unavailable")
+                        ));
+                    }
+                }
+                if let Some(zones) = report["thermal_zones"]["zones"].as_array() {
+                    ui.collapsing("Additional temperatures · unmapped",|ui|{for(index,zone)in zones.iter().enumerate(){if let Some(value)=zone["celsius"].as_f64(){ui.label(format!("Additional temperature {}: {value:.1} °C",index+1)).on_hover_text(zone["zone"].as_str().unwrap_or("Firmware zone"));}}ui.small("Not identified as CPU, GPU or battery sensors; not used for fan control.");});
+                }
+                if let Some(drivers) = report["windows_drivers"]["installed"].as_array() {
+                    ui.collapsing("Installed drivers", |ui| {
+                        for driver in drivers {
+                            ui.label(format!(
+                                "{} · {}",
+                                driver["name"].as_str().unwrap_or("Driver"),
+                                driver["version"].as_str().unwrap_or("unknown")
+                            ));
+                        }
+                        ui.small("Installed versions; check official downloads for updates.");
+                    });
+                }
+                let tuning = &report["intel_history"]["tuning"];
+                if let Some(when) = tuning["recorded_at"].as_str() {
+                    ui.collapsing(format!("Last Synapse tuning report · {when}"), |ui| {
+                        ui.small("Historical report; values may have changed.");
+                        for item in tuning["controls"].as_array().into_iter().flatten() {
+                            ui.label(format!(
+                                "{}: {}",
+                                item["name"].as_str().unwrap_or("Control"),
+                                item["value"]
+                            ));
+                        }
+                    });
+                }
+            }
+            ui.collapsing("NVIDIA clock preview · experimental",|ui|{
+                ui.horizontal(|ui|{ui.label("Core offset");ui.add(egui::DragValue::new(&mut self.batch.gpu_offsets.gpu).range(-100..=100).suffix(" MHz"));});
+                ui.horizontal(|ui|{ui.label("Memory offset");ui.add(egui::DragValue::new(&mut self.batch.gpu_offsets.vram).range(-200..=200).suffix(" MHz"));});
+                if ui.add_enabled(enabled && crate::blade_gpu::administrator(),egui::Button::new("Preview offsets · restore after 15 seconds")).clicked(){gpu_preview=true;}
+                ui.small("Administrator + AC only. Original offsets restore automatically. These preview limits are not a stability guarantee. Requires the installed Razer helper; voltage is unchanged.");
+            });
+            ui.collapsing("Available and remaining features", |ui| {
+                for item in crate::blade_platform::capabilities().as_array().into_iter().flatten() {
+                    ui.label(format!(
+                        "{} · {}",
+                        item["name"].as_str().unwrap_or("Feature"),
+                        item["status"].as_str().unwrap_or("Research")
+                    ));
+                    ui.small(item["detail"].as_str().unwrap_or(""));
+                    ui.add_space(4.0);
+                }
+            });
+        });
+        if gpu_preview {
+            let offsets = self.batch.gpu_offsets;
+            self.batch_job(ctx, "Preview NVIDIA clock offsets", move || {
+                crate::blade_gpu::preview(offsets, &blade_profiles::journal_path("gpu-preview")?)
+            });
+        }
+        if platform {
+            self.batch_job(ctx, "Read platform capabilities", || {
+                Ok(serde_json::json!({"platform_inventory":crate::blade_platform::inspect()?}))
+            });
         }
         if inspect {
             self.batch_job(ctx,"Inspect controller features",|| {

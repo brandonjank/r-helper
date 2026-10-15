@@ -56,6 +56,8 @@ pub struct Preset {
     pub underside_brightness: u8,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub underside_color: Option<[u8; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub underside_keys: Option<Vec<[u8; 3]>>,
     pub logo: crate::types::LogoMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speed: Option<u8>,
@@ -63,8 +65,14 @@ pub struct Preset {
 impl Preset {
     pub fn validate(&self) -> Result<()> {
         ensure!(
-            self.underside_color.is_none() || self.style == Style::Static,
-            "Independent underside color requires Static keyboard lighting"
+            self.underside_color.is_none() || matches!(self.style, Style::Static | Style::PerKey),
+            "Independent underside color requires Static or Per-key keyboard lighting"
+        );
+        ensure!(
+            self.underside_keys
+                .as_ref()
+                .is_none_or(|keys| keys.len() == 19 && self.underside_color.is_some()),
+            "Underside map requires independent color and exactly 19 cells"
         );
         ensure!(self.keys.len() == 114, "Keyboard map must contain 6 × 19 colors");
         if let Some(speed) = self.speed {
@@ -159,6 +167,7 @@ impl Preset {
             underside: s.underside,
             underside_brightness: s.underside_brightness,
             underside_color: None,
+            underside_keys: None,
             logo,
             speed: if matches!(
                 style,
@@ -198,7 +207,7 @@ impl Preset {
             write(device, Change::Underside(false))?;
         }
         c::send_command(device, 0x0f02, &self.packet())?;
-        if self.style == Style::PerKey {
+        if self.style == Style::PerKey && self.underside_color.is_none() {
             for row in 0..6 {
                 let mut p = vec![0, 5, row as u8, 0, 18];
                 for color in &self.keys[row * 19..(row + 1) * 19] {
@@ -211,7 +220,10 @@ impl Preset {
         c::set_logo_mode(device, self.logo)?;
         write(device, Change::UndersideBrightness(self.underside_brightness))?;
         if let Some(color) = self.underside_color {
-            super::native::write_static_frame(device, self.color, color)?;
+            let keyboard =
+                if self.style == Style::PerKey { self.keys.clone() } else { vec![self.color; 114] };
+            let underside = self.underside_keys.clone().unwrap_or_else(|| vec![color; 19]);
+            super::native::write_pixels(device, &keyboard, &underside)?;
         }
         write(device, Change::Underside(self.underside))?;
         Ok(())
@@ -225,9 +237,15 @@ impl Preset {
         let logo = c::get_logo_mode(&device)?;
         // For CustomFrame, the caller must retain the last applied R-Helper map
         // for recovery; never pretend effect metadata backs up the pixels.
-        let recovery = Self::capture(&before, logo).ok();
+        let original_mode = super::native::mode_on(&device)?;
+        // Another driver's native pixels are not backed up by stored effect metadata.
+        let recovery = if original_mode == NativeMode::Driver && !super::native::active() {
+            None
+        } else {
+            Self::capture(&before, logo).ok()
+        };
         if self.underside_color.is_some() {
-            super::native::arm(recovery.as_ref(), super::native::mode_on(&device)?)?;
+            super::native::arm(recovery.as_ref(), original_mode)?;
         }
         super::super::journal(
             &mut file,

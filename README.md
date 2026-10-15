@@ -14,6 +14,11 @@ with separate colors saved in profiles and automatic restoration on release.
 The Windows auxiliary preview remains experimental.
 See [extended controls and the return-to-desk test batch](docs/blade18-extended-controls.md).
 
+The next batch adds static underside cell maps, on-demand firmware/panel/driver and
+thermal-zone diagnostics, guarded Windows resolution previews and an experimental
+administrator-only NVIDIA clock preview. See [tested results and remaining
+requirements](docs/blade18-autonomous-batch.md).
+
 Version 0.5.0 adds firmware keyboard effects and experimental per-key colors,
 AC/battery lighting presets and power policies, named application profiles,
 charge-once request/cancel, and guarded display changes with color-profile information.

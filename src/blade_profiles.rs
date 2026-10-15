@@ -285,6 +285,7 @@ mod tests {
                 underside: false,
                 underside_brightness: 64,
                 underside_color: None,
+                underside_keys: None,
                 logo: librazer::types::LogoMode::Static,
             },
             display: librazer::display::Profile {
@@ -307,6 +308,15 @@ mod tests {
         decoded.lighting.validate().unwrap();
         p.lighting.style = librazer::blade18::lighting::Style::WaveLeft;
         assert!(p.lighting.validate().is_err());
+        p.lighting.style = librazer::blade18::lighting::Style::PerKey;
+        p.lighting.underside_keys = Some(vec![[0, 255, 0]; 19]);
+        p.lighting.validate().unwrap();
+        let encoded = serde_json::to_vec(&p).unwrap();
+        let decoded: Named = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(decoded.lighting.underside_keys, p.lighting.underside_keys);
+        p.lighting.underside_keys.as_mut().unwrap().pop();
+        assert!(p.lighting.validate().is_err());
+
         let mut legacy = serde_json::to_value(named()).unwrap();
         legacy["lighting"].as_object_mut().unwrap().remove("underside_color");
         let legacy: Named = serde_json::from_value(legacy).unwrap();

@@ -77,6 +77,7 @@ impl BladeApp {
             vendor: crate::blade_vendor::Ui::default(),
             extended: None,
             controller_telemetry: None,
+            platform_report: None,
             lamp_report: None,
             lamp_color: [32, 64, 255],
             lamp_highlight: false,

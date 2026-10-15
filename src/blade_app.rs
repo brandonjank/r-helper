@@ -22,6 +22,7 @@ struct BladeApp {
     vendor: crate::blade_vendor::Ui,
     extended: Option<serde_json::Value>,
     controller_telemetry: Option<serde_json::Value>,
+    platform_report: Option<serde_json::Value>,
     lamp_report: Option<serde_json::Value>,
     lamp_color: [u8; 3],
     lamp_highlight: bool,
@@ -96,6 +97,7 @@ impl BladeApp {
             vendor: crate::blade_vendor::Ui::default(),
             extended: None,
             controller_telemetry: None,
+            platform_report: None,
             lamp_report: None,
             lamp_color: [32, 64, 255],
             lamp_highlight: false,
@@ -361,6 +363,7 @@ impl BladeApp {
                     if report["device_state"].is_object() {
                         self.state = serde_json::from_value(report["device_state"].clone()).ok();
                     }
+                    if report["platform_inventory"].is_object() {self.platform_report=Some(report["platform_inventory"].clone());}
                     if report["lighting_controls"].is_object() {
                         self.lighting =
                             serde_json::from_value(report["lighting_controls"].clone()).ok();
@@ -396,6 +399,7 @@ impl BladeApp {
                             self.lamp_report = Some(report["lamp_inventory"].clone());
                         }
                     } else if report["display_controls"].is_object() {
+                        self.batch.display_mode=None;
                         self.display =
                             serde_json::from_value(report["display_controls"].clone()).ok();
                         if let Some(path) = report["display_pending"].as_str() {

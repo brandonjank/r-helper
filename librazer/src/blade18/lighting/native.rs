@@ -92,7 +92,9 @@ fn read_recovery(path: &Path) -> Result<Recovery> {
     let record: Recovery = serde_json::from_slice(&std::fs::read(path)?)?;
     record.preset.validate()?;
     ensure!(
-        record.preset.underside_color.is_none() && record.mode == NativeMode::Firmware,
+        record.preset.underside_color.is_none()
+            && record.preset.underside_keys.is_none()
+            && record.mode == NativeMode::Firmware,
         "Invalid native recovery baseline"
     );
     Ok(record)
@@ -115,25 +117,42 @@ pub(super) fn write_static_frame(
     keyboard: [u8; 3],
     underside: [u8; 3],
 ) -> Result<()> {
+    write_pixels(device, &[keyboard; 114], &[underside; 19])
+}
+pub(super) fn write_pixels(
+    device: &Device,
+    keyboard: &[[u8; 3]],
+    underside: &[[u8; 3]],
+) -> Result<()> {
+    ensure!(
+        keyboard.len() == 114 && underside.len() == 19,
+        "Native frame must contain 114 keyboard and 19 underside cells"
+    );
     for row in 0..7 {
+        let colors = if row == 6 {
+            underside
+        } else {
+            &keyboard[row as usize * 19..(row as usize + 1) * 19]
+        };
         device
             .send(
-                crate::packet::Packet::new(
-                    0x030b,
-                    &row_packet(row, if row == 6 { underside } else { keyboard })?,
-                )
-                .blade_matrix_framing()?,
+                crate::packet::Packet::new(0x030b, &pixel_packet(row, colors)?)
+                    .blade_matrix_framing()?,
             )
             .with_context(|| format!("Write native matrix row {row}"))?;
     }
     device.send(crate::packet::Packet::new(0x030a, &[5, 0]).blade_matrix_framing()?)?;
     Ok(())
 }
+#[cfg(test)]
 fn row_packet(row: u8, color: [u8; 3]) -> Result<Vec<u8>> {
-    ensure!(row <= 6, "Native lighting row outside the observed seven-row layout");
+    pixel_packet(row, &[color; 19])
+}
+fn pixel_packet(row: u8, colors: &[[u8; 3]]) -> Result<Vec<u8>> {
+    ensure!(row <= 6 && colors.len() == 19, "Native row must be 0–6 with exactly 19 cells");
     let mut packet = vec![0xff, row, 0, 18];
-    for _ in 0..19 {
-        packet.extend_from_slice(&color);
+    for color in colors {
+        packet.extend_from_slice(color);
     }
     packet.resize(70, 0);
     Ok(packet)
@@ -192,6 +211,17 @@ pub fn native_static_zones(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_pixel_packets_keep_column_order_and_reject_partial_rows() {
+        let mut colors = vec![[0, 0, 0]; 19];
+        colors[0] = [255, 0, 0];
+        colors[18] = [0, 255, 0];
+        let packet = pixel_packet(6, &colors).unwrap();
+        assert_eq!(&packet[4..7], &[255, 0, 0]);
+        assert_eq!(&packet[58..61], &[0, 255, 0]);
+        assert!(pixel_packet(6, &colors[..18]).is_err());
+        assert!(pixel_packet(7, &colors).is_err());
+    }
     #[test]
     fn native_row_layout_is_exact_and_excludes_other_regions_and_rows() {
         for row in 0..=6 {
