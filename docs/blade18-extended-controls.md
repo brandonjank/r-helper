@@ -37,15 +37,26 @@ Read-only Windows metadata reports **115 RGB lamps**:
 - RGB/gain level counts are all 255. Their physical correspondence to logo or
   underside is not yet confirmed. Do not relabel them from positions alone.
 
-The new Windows lighting map shows reported positions and key-to-lamp associations.
-Inventory sends no colors. An explicit **15-second auxiliary preview** is restricted
-to the exact verified 115-lamp / 97-Control / 18-Branding descriptor and indices
-97–114. It requires Windows to report the app has foreground lighting availability.
-An optional orange highlight addresses one auxiliary lamp (1–18) against the chosen
-base color, so the owner can map individual lamps without addressing keyboard LEDs.
-A timer releases the owner; Windows also releases it when the process exits.
-Pixel colors cannot be read back or backed up. Release restores Windows' lighting
-ownership rather than claiming an exact pixel rollback.
+The Windows lighting map shows reported positions and key-to-lamp associations.
+Inventory now runs in a background helper, not the foreground GUI process, and
+sends no colors. The explicit **15-second auxiliary test** checks the exact
+115-lamp / 97-Control / 18-Branding descriptor in an isolated temporary window.
+It requires a recoverable Static keyboard preset. The 97 keyboard lamps receive
+the saved uniform color scaled by saved brightness; the 18 auxiliary lamps receive
+the test color, with an optional orange highlight confined to lamp 1–18.
+This writes all 115 colors in one buffered update to avoid leaving keyboard lamps
+uninitialized. Windows must report foreground lighting availability before a write.
+
+The main GUI hides in the tray during the test. The temporary owner closes after
+15 seconds (or the owner presses End test), and the parent waits for process exit
+before reapplying the captured firmware lighting under its device operation lock.
+A separate recovery helper retries restoration after 45 seconds if the parent
+fails; a successful parent restoration disarms it. A failed startup before any
+preview also disarms recovery so it cannot overwrite later settings. The parent
+terminates a test that exceeds 25 seconds. Reports distinguish API acceptance,
+firmware readback and required physical confirmation. Original LampArray pixels
+cannot be captured, and exact Windows ambient colors are not claimed as backed up.
+Static-only testing avoids inventing a backup of dynamic effects or per-key pixels.
 
 This preview is not a complete background RGB implementation. Microsoft's ambient
 background lighting contract requires packaged app identity and a lighting app
@@ -54,6 +65,38 @@ foreground-only standard-interface test. It does not disable Windows lighting or
 change global personalization settings. A shortcut opens Windows' lighting page.
 
 ## Unsupported and unresolved findings
+
+### Physical auxiliary preview follow-up
+
+With R-Helper elevated and Game Manager/RGS verified stopped, the owner tested
+blue (`#2040FF`) and red (`#FF2020`) auxiliary requests. Windows accepted both,
+but the owner saw only a green logo; the underside and keyboard were off during
+the red test. The owner confirmed the physical logo is green-only with brightness
+control, not RGB. Retain the existing single-color logo controls and do not expose
+a logo color picker. This **fails physical RGB validation**. It does not establish that
+the 18 reported Branding lamps correspond to the logo or that their advertised
+RGB channels work. Foreground ownership may also affect unaddressed keyboard
+lamps, so auxiliary-only indexing does not guarantee an unchanged keyboard.
+The timed preview ended, and the verified firmware static-blue preset was
+reapplied with exact readback (keyboard brightness 176, underside off). The owner
+subsequently reported that the keyboard was not blue despite this readback;
+visible restoration is therefore **not verified**. Resolve Windows/firmware
+lighting ownership before sleep/wake testing. Follow-up: after the owner ended
+the preview and hid R-Helper, reapplying the same firmware preset visibly restored
+blue and it stayed blue. Game Manager/RGS remained stopped and the recovery guard
+reported no errors. This implicates foreground-lighting interaction but does not
+identify its exact cause; hidden steady-state restoration is now owner-verified.
+The owner also confirmed blue returned and stayed blue after sleep/wake with
+R-Helper hidden and AC connected.
+Keep this interface experimental pending mapping and ownership investigation.
+
+The isolated-window cleanup and keyboard seeding are implemented following these
+observations. Their physical behavior still needs a fresh owner test; earlier
+failed blue/red previews are not retroactively counted as passing.
+The new standalone recovery helper passed both a completed-parent cancellation
+check (no fallback write) and a real 45-second fallback reapplication of the saved
+blue preset with firmware readback. This validates timed recovery, not yet the
+complete isolated foreground test or its visible restoration.
 
 The fixed inventory probes 19 audited getter shapes. It does not scan command IDs,
 LED IDs or device modes. Results are saved privately in ignored local reports.
@@ -91,15 +134,22 @@ Imported profiles cannot enable takeover.
 The GUI also holds a single-instance lease, so opening a second copy brings the
 existing controller forward instead of starting competing policy workers.
 
-**Live service pause is not yet validated:** this session is not administrator and
-Windows denied access to stop Razer Game Manager Service 3. Preflight left services
-unchanged and reports that limitation. Exit the normal app and run R-Helper as
-administrator for the real takeover/restore test. No unattended UAC prompt or
-persistent service-disable change was issued.
+The initial non-administrator preflight denied access to stop Razer Game Manager
+Service 3 and left services unchanged. The owner subsequently approved the
+administrator launch for the real takeover/restore test. No persistent service
+disable change was issued.
+
+Follow-up: the administrator GUI successfully paused Game Manager Service 3 and
+RGS. Both retained Auto startup; the excluded Razer Elevation Service stayed
+Running/Manual. The recovery guard reported no errors on repeated checks.
+Normal Exit restoration passed with this real service record: both Game Manager
+and RGS returned to Running/Auto, Elevation remained Running/Manual, and comparison
+against the pre-takeover baseline found no differences. The guard reported
+`ok: true` with no error; neither the GUI nor a recovery helper remained running.
 
 ## Validation and return-to-desk batch
 
-The complete workspace suite passes **67 tests**. The optimized Windows build
+The complete workspace suite passes **68 tests** after the ownership cleanup. The optimized Windows build
 passes. Clippy completes with existing repository warnings; a strict warnings-as-
 errors pass is not clean, and no new-module lint warning remains.
 
@@ -132,11 +182,12 @@ takeover helper's overhead.
 - Original performance/fan/charge-limit/lighting settings are restored after the
   automatic HID batches. Raw reports and machine-local configuration stay out of Git.
 
-When back: test takeover/restore as administrator; confirm Fn defaults with and
+Remaining owner checks: confirm Fn defaults with and
 without Fn; check gaming mode; visually check Ripple/Starlight and their durations;
 run the 15-second auxiliary preview and identify the changed physical zone. Then
-test sleep/AC switching with the intended lighting owner selected. Keep this PR a
-test candidate until the privileged and physical checks are complete.
+test AC switching with the intended lighting owner selected. Privileged takeover,
+normal exit restoration and hidden sleep/wake lighting passed. Keep auxiliary
+LampArray previews experimental until mapping and visible restoration are fixed.
 
 ## Primary protocol sources
 
@@ -146,3 +197,4 @@ test candidate until the privileged and physical checks are complete.
 - [OpenRazer protocol documentation in source](https://github.com/openrazer/openrazer/blob/master/driver/razerchromacommon.c): extended firmware effect formats. Protocol facts only; no implementation copied.
 - [Microsoft Dynamic Lighting documentation](https://learn.microsoft.com/en-us/windows/apps/develop/devices-sensors/lighting-dynamic-lamparray): priority, autonomous behavior and background identity requirements.
 - [Microsoft LampArray API](https://learn.microsoft.com/en-us/uwp/api/windows.devices.lights.lamparray): metadata and explicitly indexed colors.
+- [Microsoft LampArray.IsEnabled](https://learn.microsoft.com/en-us/uwp/api/windows.devices.lights.lamparray.isenabled): buffered updates while disabled and flush on enable; disabling alone is not an ownership-release guarantee.

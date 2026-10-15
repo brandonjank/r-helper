@@ -12,7 +12,6 @@ impl BladeApp {
         let mut inspect = false;
         let mut read_lamps = false;
         let mut preview_lamps = false;
-        let mut release_lamps = false;
         super::view::card(ui, "Keyboard behavior", |ui| {
             ui.add_enabled_ui(enabled,|ui| {
                 if ui.button("Read keyboard controls").clicked(){requested=Some(None);}
@@ -50,7 +49,7 @@ impl BladeApp {
         });
         super::view::card(ui, "Auxiliary RGB lighting · experimental", |ui| {
             if blade18::lamp_array::preview_active() {
-                ui.label("Auxiliary preview active · automatic release after 15 seconds");
+                ui.label("Auxiliary preview active · automatic restoration after test window closes");
                 ctx.request_repaint_after(std::time::Duration::from_secs(1));
             } else {
                 ui.small("Auxiliary preview inactive");
@@ -62,7 +61,7 @@ impl BladeApp {
                         let lamps=device["lamps"].as_array();
                         let auxiliary=lamps.map(|items|items.iter().filter(|item|item["purposes"]==4).count()).unwrap_or(0);
                         ui.label(format!("{} lamps · {auxiliary} auxiliary RGB lamps",device["lamp_count"]));
-                        ui.label(if device["available"]==true{"Last check: Windows lighting available"}else{"Last check: Windows lighting unavailable"});
+                        ui.small("Read-only metadata · foreground availability is checked by the test window");
                         ui.collapsing("View lighting layout",|ui|draw_lamp_map(ui,device));
                     }
                     if report["windows_dynamic_lighting"]==true{ui.label("Windows Dynamic Lighting is enabled and can compete with firmware lighting.");}
@@ -70,27 +69,30 @@ impl BladeApp {
                 ui.horizontal_wrapped(|ui|{
                     ui.label("Preview color");
                     ui.color_edit_button_srgb(&mut self.lamp_color);
-                    if ui.button("Preview auxiliary lamps · 15 seconds").clicked(){preview_lamps=true;}
-                    if ui.button("End preview").clicked(){release_lamps=true;}
+                    if ui.add_enabled(self.desktop.is_some(),egui::Button::new("Test auxiliary lamps · 15 seconds")).clicked(){preview_lamps=true;}
                 });
                 ui.horizontal_wrapped(|ui|{ui.checkbox(&mut self.lamp_highlight,"Highlight one lamp in orange");if self.lamp_highlight{ui.add(egui::DragValue::new(&mut self.lamp_index).range(1..=18).prefix("Lamp "));}});
                 if ui.button("Open Windows lighting settings").clicked(){let _=std::process::Command::new("explorer.exe").arg("ms-settings:personalization-lighting").spawn();}
-                super::view::hint(ui,"The 18 auxiliary lamps are not yet mapped to logo or underside. This test works only while R-Helper has foreground lighting control. It releases control after 15 seconds; original pixel colors cannot be read back.");
+                super::view::hint(ui,"The logo is green-only. The 18 reported auxiliary lamps remain unmapped. This test requires a static keyboard effect, opens a temporary window, then reapplies your saved lighting. R-Helper stays hidden in the tray afterward. Physical RGB behavior is unverified.");
             });
         });
         if read_lamps {
             self.batch_job(ctx,"Inspect Windows lighting",|| {
-                Ok(serde_json::json!({"extended_controls":blade18::extended::status(),"controller_telemetry":blade18::extended::telemetry(),"lamp_inventory":blade18::lamp_array::inventory()?}))
+                // A metadata-only helper never becomes the foreground lighting owner.
+                let output=blade_profiles::journal_path("lamp-inventory")?;
+                let mut command=std::process::Command::new(std::env::current_exe()?.with_file_name("rhelper-controls.exe"));
+                command.arg("--lamp-array").arg("--output").arg(&output);
+                #[cfg(windows)] {use std::os::windows::process::CommandExt;command.creation_flags(0x08000000);}
+                anyhow::ensure!(command.output()?.status.success(),"Windows lighting inventory failed");
+                let inventory:serde_json::Value=serde_json::from_slice(&std::fs::read(&output)?)?;
+                Ok(serde_json::json!({"extended_controls":blade18::extended::status(),"controller_telemetry":blade18::extended::telemetry(),"lamp_inventory":inventory}))
             });
         }
         if preview_lamps {
             let color = self.lamp_color;
             let highlight = self.lamp_highlight.then_some(self.lamp_index);
-            self.batch_job(ctx,"Preview auxiliary RGB",move||{let result=blade18::lamp_array::preview_auxiliary(color,highlight,&blade_profiles::journal_path("auxiliary-preview")?)?;Ok(serde_json::json!({"extended_controls":blade18::extended::status(),"controller_telemetry":blade18::extended::telemetry(),"lamp_preview":result}))});
-        }
-        if release_lamps {
-            blade18::lamp_array::release();
-            self.message = "Auxiliary preview ended · Windows lighting control released".into();
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            self.batch_job(ctx,"Test auxiliary RGB and restore lighting",move||crate::blade_auxiliary::run(color,highlight,&blade_profiles::journal_path("auxiliary-test")?));
         }
         if inspect {
             self.batch_job(ctx,"Inspect controller features",|| {

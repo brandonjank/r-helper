@@ -8,7 +8,10 @@ static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::
 pub fn release() {
     #[cfg(windows)]
     if let Ok(mut owner) = OWNER.lock() {
-        *owner = None;
+        if let Some((_, lamp)) = owner.take() {
+            // Stop flushing this object's buffered state before releasing it.
+            let _ = lamp.SetIsEnabled(false);
+        }
     }
 }
 pub fn preview_active() -> bool {
@@ -121,6 +124,7 @@ pub fn inventory() -> Result<serde_json::Value> {
 pub fn preview_auxiliary(
     rgb: [u8; 3],
     highlight: Option<u8>,
+    keyboard: [u8; 3],
     path: &std::path::Path,
 ) -> Result<serde_json::Value> {
     use windows::{
@@ -169,7 +173,7 @@ pub fn preview_auxiliary(
     ensure!(found.len() == 1, "Expected one Blade LampArray");
     let lamp = finish!(LampArray::FromIdAsync(&found[0]));
     ensure!(lamp.LampCount()?==115 && lamp.IsConnected()? && lamp.IsAvailable()?,"Bring R-Helper to the foreground and check Windows Dynamic Lighting priority; no color sent");
-    let indices = (97..115).collect::<Vec<_>>();
+    let indices = (0..115).collect::<Vec<_>>();
     for i in 0..115 {
         let info = lamp.GetLampInfo(i)?;
         let purpose = info.Purposes()?;
@@ -190,15 +194,19 @@ pub fn preview_auxiliary(
     let file = std::fs::File::options().create_new(true).write(true).open(path)?;
     serde_json::to_writer_pretty(
         &file,
-        &serde_json::json!({"model":"RZ09-0529","operation":"auxiliary_lamp_preview","indices":indices,"requested":rgb,"highlight_lamp":highlight,"duration_seconds":15,"color_readback_available":false,"recovery":"Windows releases this foreground lighting owner on timeout or process exit"}),
+        &serde_json::json!({"model":"RZ09-0529","operation":"auxiliary_lamp_preview","indices":indices,"requested":rgb,"keyboard_static_color":keyboard,"highlight_lamp":highlight,"duration_seconds":15,"color_readback_available":false,"recovery":"Isolated preview process exits; parent reapplies saved firmware lighting, backed by a recovery process"}),
     )?;
     file.sync_all()?;
     let mut owner = OWNER.lock().map_err(|_| anyhow::anyhow!("Lamp ownership lock unavailable"))?;
-    let mut colors = vec![windows::UI::Color { A: 255, R: rgb[0], G: rgb[1], B: rgb[2] }; 18];
-    if let Some(index) = highlight {
-        colors[usize::from(index - 1)] = windows::UI::Color { A: 255, R: 255, G: 64, B: 32 };
-    }
+    let colors = preview_colors(rgb, highlight, keyboard)?
+        .into_iter()
+        .map(|[r, g, b]| windows::UI::Color { A: 255, R: r, G: g, B: b })
+        .collect::<Vec<_>>();
+    lamp.SetIsEnabled(false)?;
+    // Keyboard RGB already includes its saved brightness; do not scale it twice.
+    lamp.SetBrightnessLevel(1.0)?;
     lamp.SetColorsForIndices(&colors, &indices)?;
+    lamp.SetIsEnabled(true)?;
     let generation = GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
     *owner = Some((generation, lamp));
     drop(owner);
@@ -206,7 +214,9 @@ pub fn preview_auxiliary(
         std::thread::sleep(std::time::Duration::from_secs(15));
         if let Ok(mut owner) = OWNER.lock() {
             if owner.as_ref().is_some_and(|(id, _)| *id == generation) {
-                *owner = None;
+                if let Some((_, lamp)) = owner.take() {
+                    let _ = lamp.SetIsEnabled(false);
+                }
             }
         }
     });
@@ -218,6 +228,7 @@ pub fn preview_auxiliary(
 pub fn preview_auxiliary(
     _: [u8; 3],
     _: Option<u8>,
+    _: [u8; 3],
     _: &std::path::Path,
 ) -> Result<serde_json::Value> {
     anyhow::bail!("Windows required")
@@ -226,9 +237,33 @@ fn validate_highlight(index: Option<u8>) -> Result<()> {
     ensure!(index.is_none_or(|i| (1..=18).contains(&i)), "Auxiliary lamp must be between 1 and 18");
     Ok(())
 }
+fn preview_colors(rgb: [u8; 3], highlight: Option<u8>, keyboard: [u8; 3]) -> Result<Vec<[u8; 3]>> {
+    validate_highlight(highlight)?;
+    let mut colors = vec![keyboard; 97];
+    colors.extend(std::iter::repeat_n(rgb, 18));
+    if let Some(index) = highlight {
+        colors[97 + usize::from(index - 1)] = [255, 64, 32];
+    }
+    Ok(colors)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn preview_preserves_all_keyboard_lamps_and_restricts_highlight_to_auxiliary() {
+        for index in 1..=18 {
+            let colors = preview_colors([255, 0, 0], Some(index), [22, 44, 176]).unwrap();
+            assert_eq!(colors.len(), 115);
+            assert!(colors[..97].iter().all(|c| *c == [22, 44, 176]));
+            for (offset, color) in colors[97..].iter().enumerate() {
+                assert_eq!(
+                    *color,
+                    if offset == usize::from(index - 1) { [255, 64, 32] } else { [255, 0, 0] }
+                );
+            }
+        }
+        assert!(preview_colors([0; 3], Some(19), [0; 3]).is_err());
+    }
     #[test]
     fn auxiliary_highlight_cannot_address_keyboard_or_unknown_lamps() {
         assert!(validate_highlight(None).is_ok());

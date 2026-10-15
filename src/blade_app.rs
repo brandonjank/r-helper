@@ -351,7 +351,7 @@ impl BladeApp {
             match receiver.try_recv() {
                 Ok(Ok(report)) => {
                     let completion_message = if report["lamp_preview"].is_object() {
-                        "Auxiliary RGB preview requested · 15 seconds · color readback unavailable"
+                        "Auxiliary test ended · saved firmware lighting reapplied · confirm appearance"
                     } else if report["keyboard_batch"]["passed"] == true {
                         "Keyboard checks passed · original values restored"
                     } else {

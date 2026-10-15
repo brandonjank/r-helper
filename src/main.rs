@@ -1,6 +1,7 @@
 #![windows_subsystem = "windows"]
 
 mod blade_app;
+mod blade_auxiliary;
 mod blade_batch_test;
 mod blade_curves;
 mod blade_desktop;
@@ -1313,6 +1314,13 @@ fn set_windows_app_id() {
 fn set_windows_app_id() {}
 
 fn main() -> Result<(), eframe::Error> {
+    if let Some(result) = blade_auxiliary::dispatch() {
+        if let Err(error) = result {
+            eprintln!("Auxiliary lighting: {error:#}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     if let Some(result) = blade_vendor::dispatch() {
         if let Err(error) = result {
             eprintln!("Razer ownership: {error:#}");
