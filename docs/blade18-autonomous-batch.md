@@ -46,6 +46,9 @@ backend; this is not yet a wholly vendor-library-free replacement.
 | Thermal counters | `\_TZ.TZ00`: 3010 tenths K (27.85 °C); `\_SB.PC00.LPCB.EC0.TZRZ`: 3182 tenths K (45.05 °C). Windows' own counter help confirms units. Names/temperatures do not identify physical sensor locations. |
 | NVIDIA public GetPstates20 | Current P0 graphics/memory offsets zero; both marked editable. Driver bounds were returned, but do not prove safe offsets or permission to write. |
 | Razer GPU offset getter | Independently reported core 0 / memory 0. |
+| Elevated GPU preview | Core -15 MHz / memory 0 was accepted and read back, held for 15 seconds, then restored and read back as 0/0. The independent guard acknowledged parent restoration. This proves this preview and recovery path, not overclock stability or a voltage range. |
+| Elevated native maintenance | All four cases passed preset capture/JSON roundtrip and expected Driver/Firmware mode checks: uniform independent RGB, simultaneous keyboard/underside cell maps, darkening, and firmware transition. Original lighting restored. Pixel positions were not visually checked. |
+| Recovery fault tests | Owner exit restored the saved native lighting through the independent guard; stopping the guard exercised successful parent fallback. Both Razer services returned to Running with Automatic startup after the full batch; no R-Helper process remained. |
 | Non-administrator GPU write test | NVIDIA returned `NVAPI_INVALID_USER_PRIVILEGE` (-137), documented as requiring administrator rights. No nonzero offset was established; original zero offsets were verified. The app now rejects previews before writing in a non-admin session. Zero-change guard completion and owner-exit recovery also passed without invoking a tuning setter. |
 | Snap Tap getter | Fixed profile-1 `02a7` 15-byte request returned NotSupported. No Snap Tap setter enabled. This does not rule out Synapse's software mapping engine. |
 | Fan-table getter candidate | Shared protocol declares an 80-byte `0d84` getter beside its table setter. One explicitly inferred header, class 0 / fan 1 / curve 0, returned NotSupported. No selector/class sweep or table writes. This does not rule out another documented table path. |
@@ -53,9 +56,10 @@ backend; this is not yet a wholly vendor-library-free replacement.
 
 Raw evidence stays under ignored `diagnostic-reports/research/`; exported platform
 reports omit native helper serial/path fields. Full automated suite: 80 tests;
-optimized build passes. Clippy completes with repository warnings. The elevated
-maintenance batch was launched but remains pending Windows UAC; no new physical
-per-cell mapping or successful nonzero GPU preview is claimed.
+optimized build passes, and both GitHub build/test jobs passed for ad36a63.
+Clippy completes with repository warnings. The elevated maintenance batch completed
+successfully at 19:54 local time (report prefix `native-maintenance-20261014-195300`).
+Individual underside cell positions remain physically unverified.
 
 ## Remaining controls and the reason they are not enabled
 

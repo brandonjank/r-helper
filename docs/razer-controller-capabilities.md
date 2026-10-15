@@ -2,8 +2,9 @@
 
 Current status is in the [autonomous discovery/implementation batch](blade18-autonomous-batch.md).
 Independent native underside RGB and privileged Razer takeover were physically
-validated before this batch. New per-cell maps and GPU previews await the elevated
-batch/physical mapping checks. The [extended-controls history](blade18-extended-controls.md)
+validated before this batch. The elevated native-map/recovery batch and a -15 MHz
+GPU preview with verified restoration passed; individual cell positions still
+need physical mapping checks. The [extended-controls history](blade18-extended-controls.md)
 retains earlier experiments. Older unconfirmed statements below are historical;
 use the current batch and lighting evidence for present capability status.
 
