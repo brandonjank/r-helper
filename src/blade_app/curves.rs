@@ -59,7 +59,7 @@ impl BladeApp {
                 if ui.add_enabled(!self.preview&&!active&&idle&&valid.is_ok()&&self.curve_error.is_none(),egui::Button::new("Save curves")).clicked(){self.message=match crate::blade_curves::save(&self.curve_settings){Ok(())=>"Curves saved; automatic startup remains off".into(),Err(error)=>format!("Could not save curves: {error:#}")};}
                 let ready=!self.preview&&!active&&idle&&valid.is_ok()&&self.last_power==Some(true)&&self.state.as_ref().is_some_and(|s|s.performance==PerfMode::Balanced&&s.fan_mode==FanMode::Auto);
                 if ui.add_enabled(ready,egui::Button::new("Start curves")).clicked(){match crate::blade_curves::launch(&self.curve_settings,self.curve_control.clone(),ctx.clone()){Ok(events)=>{self.curve_events=Some(events);self.curve_status=None;self.message="Starting supervised curve session…".into();},Err(error)=>self.message=format!("Could not start curves: {error:#}")}}
-                if ui.add_enabled(active&&idle,egui::Button::new("Stop + automatic")).clicked(){self.start(ctx,"Stop curves",None,blade18::status);}
+                if ui.add_enabled(active&&idle,egui::Button::new("Stop + automatic")).clicked(){self.start(ctx,"Stop curves",None,None,blade18::status);}
             });
             ui.label(RichText::new("Stops on sensor/power faults, resume or session timeout. Separate watchdog restores Auto if the app/controller exits.").small().color(Color32::from_gray(170)));
         });

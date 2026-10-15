@@ -4,6 +4,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 pub struct Update {
+    pub activity: Option<crate::profile_activity::Activity>,
     pub ac: Option<bool>,
     pub result: Option<Result<State, String>>,
     pub monitor_error: Option<String>,
@@ -38,6 +39,7 @@ impl Watcher {
             if let Err(error) = &registration {
                 previous = blade18::ac_connected().ok();
                 let _ = sender.send(Update {
+                    activity: None,
                     ac: previous,
                     result: None,
                     monitor_error: Some(format!(
@@ -79,6 +81,7 @@ impl Watcher {
                 } else {
                     Ok(())
                 };
+                let mut activity = None;
                 let result = blade_profiles::transition(previous, current, saved.automatic)
                     .and_then(|ac| {
                         let profile = if ac { saved.ac.clone() } else { saved.battery.clone() };
@@ -94,7 +97,9 @@ impl Watcher {
                                     let _lock = blade_profiles::operation_lock()?;
                                     crate::blade_curves::stop_and_wait(&curves)?;
                                     if let Some(named) = crate::blade_policy::matched(&saved, ac) {
-                                        return named.apply();
+                                        let state = named.apply()?;
+                                        activity = Some(crate::profile_activity::Activity::named(&named, "Power source changed · application profile takes priority"));
+                                        return Ok(state);
                                     }
                                     let state = blade_profiles::apply(&profile, display.as_ref())?;
                                     let lighting = if ac {
@@ -107,13 +112,17 @@ impl Watcher {
                                             "power-lighting",
                                         )?)?;
                                     }
+                                    activity = Some(crate::profile_activity::Activity::power(ac, &saved, "Power source changed"));
                                     Ok(state)
                                 })
                                 .map_err(|error| format!("{error:#}"))
                         })
                     });
                 previous = current;
-                if sender.send(Update { ac: current, result, monitor_error: None }).is_err() {
+                if sender
+                    .send(Update { activity, ac: current, result, monitor_error: None })
+                    .is_err()
+                {
                     return;
                 }
                 ctx.request_repaint();

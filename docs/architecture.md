@@ -41,11 +41,24 @@ interpreting UI labels or probing unknown setters. Add offline regression tests
 for dispatch, validation and recovery behavior. Hardware observations remain
 model-specific evidence and cannot be replaced by a passing build.
 
-## Next stages
+## Panels, profile history and distribution
 
-1. Split the Blade 18 page into compact panels using the existing operation layer.
-2. Show which profile was successfully applied, its trigger and controlled areas.
-3. Produce a versioned portable package with licenses and checksums.
-4. Run the deferred guided validation in `blade18-validation-batch.md` before
-   merging the hardware-validation candidate. No new live tests are needed for
-   this structural refactor.
+The Blade 18 interface now routes cards to seven compact panels. Hidden card
+bodies are not executed; switching panels performs no hardware query. Fixture
+tests render every panel without background workers or hardware access. Upstream
+models retain their existing interface.
+
+`profile_activity` carries the last successful application, trigger and controlled
+areas. Manual jobs, power transitions and foreground-application changes pass
+explicit metadata. Reads, saved selections and failed jobs do not become successful
+applications. This is session history: it cannot prove that external software has
+left the hardware unchanged. It adds no monitoring timer or hardware reads.
+
+`tools/Package-Portable.ps1` bundles the release binaries, required thermal and
+controls helpers, licenses, user notes, source manifest and SHA-256 checksums.
+CI verifies ZIP contents and hashes, overwrite refusal and missing-input failure
+before uploading the portable archive. Developer workload binaries are excluded.
+
+The deferred guided validation in `blade18-validation-batch.md` remains required
+before merging the hardware-validation candidate. Offline rendering and package
+checks do not establish live fan, sleep/resume or battery-energy behavior.

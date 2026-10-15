@@ -19,6 +19,7 @@ mod device;
 mod legacy_app;
 mod messaging;
 mod power;
+mod profile_activity;
 mod system;
 mod ui;
 mod utils;

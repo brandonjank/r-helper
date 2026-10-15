@@ -27,15 +27,12 @@ jobs:
             if ($errors) { throw "$($script.Name): $($errors -join '; ')" }
           }
       - run: cargo build --workspace --release --locked
+      - name: Package and verify portable build
+        shell: pwsh
+        run: |
+          ./tools/Package-Portable.ps1 -OutputDirectory dist/rhelper-portable
+          ./tools/Test-PortablePackage.ps1 -ArchivePath dist/rhelper-portable.zip
       - uses: actions/upload-artifact@v4
         with:
           name: rhelper-windows
-          path: |
-            target/release/rhelper.exe
-            target/release/rhelper-diagnostics.exe
-            target/release/rhelper-display.exe
-            target/release/rhelper-features.exe
-            target/release/rhelper-controls.exe
-            LICENSE
-            NOTICE
-            THIRD_PARTY_LICENSES.md
+          path: dist/rhelper-portable.zip
