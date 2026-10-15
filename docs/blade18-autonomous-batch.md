@@ -61,6 +61,26 @@ Clippy completes with repository warnings. The elevated maintenance batch comple
 successfully at 19:54 local time (report prefix `native-maintenance-20261014-195300`).
 Individual underside cell positions remain physically unverified.
 
+## Follow-up review and marker test
+
+The follow-up review covered native packet bounds, preset capture/rollback,
+vendor takeover and recovery, display preview restoration, isolated native
+providers, GPU offset recovery, and GUI operation locking.
+
+It found and fixed one GPU recovery weakness: failure of the preliminary offset
+getter prevented an attempt to write the saved original offsets. Recovery now
+attempts that write after a getter error and still requires exact readback to
+report success. A regression test exercises the getter failure, readback mismatch,
+and already-restored cases. The updated workspace suite passes 81 tests.
+
+The new `--native-cell-markers-test REQUEST OUTPUT` helper shows logical underside
+cells 1/10/19 as red/green/blue, other cells dark, and a blue keyboard for 20 seconds.
+The first run (`native-markers-20261014-195659`) passed profile capture/roundtrip,
+restored original lighting and Firmware mode, and restored vendor software.
+Physical marker positions await the observer's report; command acceptance does
+not establish LED positions. This review does not resolve the research-only
+controls or remaining physical checks listed below.
+
 ## Remaining controls and the reason they are not enabled
 
 | Area | What is established | Next requirement |

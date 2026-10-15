@@ -55,11 +55,21 @@ fn load(path: &Path) -> Result<Recovery> {
     Ok(record)
 }
 fn restore(record: &Recovery, path: &Path) -> Result<()> {
-    if Offsets::read()? == record.original {
+    restore_with(record, Offsets::read, |offsets| {
+        crate::blade_platform::set_gpu(offsets.gpu, offsets.vram, path).map(|_| ())
+    })
+}
+fn restore_with(
+    record: &Recovery,
+    mut read: impl FnMut() -> Result<Offsets>,
+    mut write: impl FnMut(Offsets) -> Result<()>,
+) -> Result<()> {
+    // A failed getter must not suppress the attempt to restore the saved offsets.
+    if read().is_ok_and(|current| current == record.original) {
         return Ok(());
     }
-    crate::blade_platform::set_gpu(record.original.gpu, record.original.vram, path)?;
-    ensure!(Offsets::read()? == record.original, "GPU offset recovery mismatch");
+    write(record.original)?;
+    ensure!(read()? == record.original, "GPU offset recovery mismatch");
     Ok(())
 }
 pub fn administrator() -> bool {
@@ -202,6 +212,35 @@ pub fn dispatch() -> Option<Result<()>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn recovery_attempts_saved_offsets_after_getter_failure_and_verifies_them() {
+        let record = Recovery {
+            model: "RZ09-0529".into(),
+            original: Offsets { gpu: 25, vram: 50 },
+            requested: Offsets { gpu: -15, vram: 0 },
+        };
+        let mut reads = 0;
+        let mut writes = vec![];
+        restore_with(
+            &record,
+            || {
+                reads += 1;
+                if reads == 1 {
+                    anyhow::bail!("Transient getter failure");
+                }
+                Ok(record.original)
+            },
+            |offsets| {
+                writes.push(offsets);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(writes, vec![record.original]);
+        assert_eq!(reads, 2);
+        assert!(restore_with(&record, || Ok(record.requested), |_| Ok(())).is_err());
+        restore_with(&record, || Ok(record.original), |_| panic!("Already restored")).unwrap();
+    }
     #[test]
     fn previews_are_bounded_and_original_offsets_are_separate() {
         assert!(Offsets { gpu: 101, vram: 0 }.validate().is_err());

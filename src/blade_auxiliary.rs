@@ -325,6 +325,7 @@ pub fn dispatch() -> Option<Result<()>> {
             | "--native-lighting-batch"
             | "--native-channel-test"
             | "--native-profile-test"
+            | "--native-cell-markers-test"
             | "--native-maintenance-batch"
             | "--native-owner-exit"
             | "--native-lighting-inspect"
@@ -347,7 +348,7 @@ pub fn dispatch() -> Option<Result<()>> {
             }
             return result;
         }
-        if mode == "--native-profile-test" {
+        if mode == "--native-profile-test" || mode == "--native-cell-markers-test" {
             let original = Preset::capture(&blade18::lighting::status()?, blade18::status()?.logo)?;
             let mut ownership = crate::blade_vendor::Session::start()?;
             let applied = (|| -> Result<serde_json::Value> {
@@ -358,6 +359,13 @@ pub fn dispatch() -> Option<Result<()>> {
                 preset.underside_color = Some([255, 0, 0]);
                 preset.underside = true;
                 preset.underside_brightness = 200;
+                if mode == "--native-cell-markers-test" {
+                    let mut cells = vec![[0, 0, 0]; 19];
+                    cells[0] = [255, 0, 0];
+                    cells[9] = [0, 255, 0];
+                    cells[18] = [0, 0, 255];
+                    preset.underside_keys = Some(cells);
+                }
                 preset.apply(&output.with_extension("apply.json"))?;
                 let captured =
                     Preset::capture(&blade18::lighting::status()?, blade18::status()?.logo)?;
@@ -371,7 +379,7 @@ pub fn dispatch() -> Option<Result<()>> {
                 )?;
                 std::thread::sleep(Duration::from_secs(20));
                 Ok(
-                    serde_json::json!({"profile_roundtrip":true,"keyboard":"blue","underside":"red","continuous_frames":false}),
+                    serde_json::json!({"profile_roundtrip":true,"keyboard":"blue","underside":if mode == "--native-cell-markers-test" {"cells 1 red, 10 green, 19 blue; others dark"} else {"red"},"physical_mapping_verified":false,"continuous_frames":false}),
                 )
             })();
             let released = ownership.stop();
