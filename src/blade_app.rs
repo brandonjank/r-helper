@@ -19,10 +19,12 @@ struct Job {
     label: String,
 }
 struct BladeApp {
+    benchmark_exit: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     vendor: crate::blade_vendor::Ui,
     extended: Option<serde_json::Value>,
     controller_telemetry: Option<serde_json::Value>,
     platform_report: Option<serde_json::Value>,
+    updates_report: Option<serde_json::Value>,
     lamp_report: Option<serde_json::Value>,
     lamp_color: [u8; 3],
     lamp_highlight: bool,
@@ -94,10 +96,12 @@ impl BladeApp {
             curve_control.clone(),
         );
         let mut app = Self {
+            benchmark_exit: None,
             vendor: crate::blade_vendor::Ui::default(),
             extended: None,
             controller_telemetry: None,
             platform_report: None,
+            updates_report: None,
             lamp_report: None,
             lamp_color: [32, 64, 255],
             lamp_highlight: false,
@@ -140,7 +144,7 @@ impl BladeApp {
             app.curve_control.clone(),
         );
         app.batch.watcher = Some(watcher);
-        if app.settings.manage_razer_software {
+        if app.settings.manage_razer_software && !crate::blade_benchmark::requested() {
             app.vendor.start(ctx, app.curve_control.clone());
         }
         app.batch.updates = Some(updates);
@@ -364,6 +368,7 @@ impl BladeApp {
                         self.state = serde_json::from_value(report["device_state"].clone()).ok();
                     }
                     if report["platform_inventory"].is_object() {self.platform_report=Some(report["platform_inventory"].clone());}
+                    if report["updates_inventory"].is_object() {self.updates_report=Some(report["updates_inventory"].clone());}
                     if report["lighting_controls"].is_object() {
                         self.lighting =
                             serde_json::from_value(report["lighting_controls"].clone()).ok();
@@ -505,6 +510,9 @@ impl BladeApp {
 }
 impl eframe::App for BladeApp {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        if self.benchmark_exit.as_ref().is_some_and(|v|v.load(std::sync::atomic::Ordering::SeqCst)) {
+            self.quitting=true;ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
         self.complete();
         self.batch_updates(ctx);
         if let Some(desktop) = &self.desktop {
@@ -583,9 +591,12 @@ pub fn run_preview() -> Result<(), eframe::Error> {
     run_with_preview(true)
 }
 fn run_with_preview(preview: bool) -> Result<(), eframe::Error> {
+    let benchmark=if preview{None}else{crate::blade_benchmark::config().map_err(|e|eframe::Error::AppCreation(e.into()))?};
+    let hidden=benchmark.as_ref().is_some_and(|b|b.hidden);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_icon(crate::load_icon())
+            .with_visible(!hidden)
             .with_title(if preview { "R-Helper · UI Preview" } else { "R-Helper · Blade 18" })
             .with_inner_size([540.0, 790.0])
             .with_min_inner_size([480.0, 560.0]),
@@ -595,7 +606,13 @@ fn run_with_preview(preview: bool) -> Result<(), eframe::Error> {
         "R-Helper Blade 18",
         options,
         Box::new(move |cc| {
-            Ok(Box::new(if preview { BladeApp::preview(cc) } else { BladeApp::new(cc) }))
+            let mut app=if preview { BladeApp::preview(cc) } else { BladeApp::new(cc) };
+            if let Some(config)=benchmark {
+                use raw_window_handle::{HasWindowHandle,RawWindowHandle};
+                let hwnd=match cc.window_handle().map(|h|h.as_raw()){Ok(RawWindowHandle::Win32(h))=>h.hwnd.get(),_=>0};
+                app.benchmark_exit=Some(crate::blade_benchmark::start(config,cc.egui_ctx.clone(),hwnd));
+            }
+            Ok(Box::new(app))
         }),
     )
 }

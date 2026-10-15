@@ -6,12 +6,19 @@ This is a capability roadmap, not a promise that another laptop's controls work 
 
 Latest milestone: independent native keyboard/underside static RGB is physically
 confirmed. Static per-key keyboard and 19-cell underside maps now save in profiles;
-individual underside positions remain unconfirmed. New on-demand panel/firmware,
+cells 1/10/18 were checked, intermediate positions are accepted by assumption,
+and slot 19 stayed dark. New on-demand panel/firmware,
 driver, GPU and thermal-zone diagnostics, guarded Windows resolution previews,
 and an administrator-only timed GPU clock preview are implemented.
 See [the autonomous batch, evidence and remaining blockers](blade18-autonomous-batch.md)
 and [native lighting details](blade18-lighting.md). Older observations below are
 retained as investigation history, not current feature status.
+
+The next candidate adds the [fan/sensor, updates and battery validation batch](blade18-validation-batch.md):
+CPU/GPU load-response evidence, renewed unequal-fan readback tests, an on-demand
+cached official firmware catalog panel, and finite process/battery measurement
+tools. Physical fan mapping, CPU die reference, curve sleep/unplug behavior and
+real battery-energy overhead remain separate validation requirements.
 
 ## Findings on this machine
 
