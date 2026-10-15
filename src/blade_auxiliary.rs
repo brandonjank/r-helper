@@ -220,32 +220,46 @@ fn keyboard_visual(output: &Path) -> Result<()> {
         let mut child = command.spawn()?;
         let start = Instant::now();
         let status = loop {
-            if let Some(status) = child.try_wait()? { break status; }
+            if let Some(status) = child.try_wait()? {
+                break status;
+            }
             if start.elapsed() >= Duration::from_secs(40) {
                 let _ = child.kill();
                 let _ = child.wait();
-                anyhow::bail!("Keyboard controls timed out; independent control guard will restore");
+                anyhow::bail!(
+                    "Keyboard controls timed out; independent control guard will restore"
+                );
             }
             std::thread::sleep(Duration::from_millis(100));
         };
         let control_report: serde_json::Value = serde_json::from_slice(&std::fs::read(&controls)?)?;
-        ensure!(status.success() && control_report["passed"] == true, "Keyboard controls failed: {control_report}");
+        ensure!(
+            status.success() && control_report["passed"] == true,
+            "Keyboard controls failed: {control_report}"
+        );
 
         let mut phases = vec![];
         for (index, style) in [Style::Starlight, Style::Ripple].into_iter().enumerate() {
             ownership.health()?;
             let preset = visual_preset(&original, style);
             preset.apply(&output.with_extension(format!("phase-{index}.json")))?;
-            ensure!(Preset::capture(&blade18::lighting::status()?, blade18::status()?.logo)? == preset, "Effect capture mismatch");
+            ensure!(
+                Preset::capture(&blade18::lighting::status()?, blade18::status()?.logo)? == preset,
+                "Effect capture mismatch"
+            );
             phases.push(serde_json::json!({"effect":style,"metadata_verified":true,"visual_verified":false}));
             std::thread::sleep(Duration::from_secs(20));
         }
         Ok(serde_json::json!({"controls":control_report,"phases":phases}))
     })();
     let released = ownership.stop();
-    let restored = Preset::capture(&blade18::lighting::status()?, blade18::status()?.logo)? == original
+    let restored = Preset::capture(&blade18::lighting::status()?, blade18::status()?.logo)?
+        == original
         && blade18::lighting::native_mode()? == blade18::lighting::NativeMode::Firmware;
-    save(output, &serde_json::json!({"tested":tested.as_ref().ok(),"test_error":tested.as_ref().err().map(|e|format!("{e:#}")),"vendor_restored":released.is_ok(),"restore_error":released.as_ref().err().map(|e|format!("{e:#}")),"original_lighting_restored":restored,"physical_confirmation_required":true}))?;
+    save(
+        output,
+        &serde_json::json!({"tested":tested.as_ref().ok(),"test_error":tested.as_ref().err().map(|e|format!("{e:#}")),"vendor_restored":released.is_ok(),"restore_error":released.as_ref().err().map(|e|format!("{e:#}")),"original_lighting_restored":restored,"physical_confirmation_required":true}),
+    )?;
     released?;
     tested?;
     ensure!(restored, "Original keyboard lighting did not restore");

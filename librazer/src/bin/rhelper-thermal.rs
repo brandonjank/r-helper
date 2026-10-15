@@ -53,8 +53,14 @@ fn main() -> Result<()> {
         while Instant::now() < deadline {
             let sample = librazer::thermal::sample()?;
             if args.cpu_threads > 0 {
-                ensure!(librazer::blade18::ac_connected()?, "AC disconnected; CPU workload stopped");
-                ensure!(sample.ec_celsius.iter().all(|t| *t > 0), "Controller temperature unavailable; workload stopped");
+                ensure!(
+                    librazer::blade18::ac_connected()?,
+                    "AC disconnected; CPU workload stopped"
+                );
+                ensure!(
+                    sample.ec_celsius.iter().all(|t| *t > 0),
+                    "Controller temperature unavailable; workload stopped"
+                );
                 ensure!(
                     sample.modes.iter().all(|mode| mode[1] == 0),
                     "Fan mode changed; workload stopped"

@@ -367,8 +367,12 @@ impl BladeApp {
                     if report["device_state"].is_object() {
                         self.state = serde_json::from_value(report["device_state"].clone()).ok();
                     }
-                    if report["platform_inventory"].is_object() {self.platform_report=Some(report["platform_inventory"].clone());}
-                    if report["updates_inventory"].is_object() {self.updates_report=Some(report["updates_inventory"].clone());}
+                    if report["platform_inventory"].is_object() {
+                        self.platform_report = Some(report["platform_inventory"].clone());
+                    }
+                    if report["updates_inventory"].is_object() {
+                        self.updates_report = Some(report["updates_inventory"].clone());
+                    }
                     if report["lighting_controls"].is_object() {
                         self.lighting =
                             serde_json::from_value(report["lighting_controls"].clone()).ok();
@@ -404,7 +408,7 @@ impl BladeApp {
                             self.lamp_report = Some(report["lamp_inventory"].clone());
                         }
                     } else if report["display_controls"].is_object() {
-                        self.batch.display_mode=None;
+                        self.batch.display_mode = None;
                         self.display =
                             serde_json::from_value(report["display_controls"].clone()).ok();
                         if let Some(path) = report["display_pending"].as_str() {
@@ -510,8 +514,10 @@ impl BladeApp {
 }
 impl eframe::App for BladeApp {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
-        if self.benchmark_exit.as_ref().is_some_and(|v|v.load(std::sync::atomic::Ordering::SeqCst)) {
-            self.quitting=true;ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        if self.benchmark_exit.as_ref().is_some_and(|v| v.load(std::sync::atomic::Ordering::SeqCst))
+        {
+            self.quitting = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         self.complete();
         self.batch_updates(ctx);
@@ -591,8 +597,12 @@ pub fn run_preview() -> Result<(), eframe::Error> {
     run_with_preview(true)
 }
 fn run_with_preview(preview: bool) -> Result<(), eframe::Error> {
-    let benchmark=if preview{None}else{crate::blade_benchmark::config().map_err(|e|eframe::Error::AppCreation(e.into()))?};
-    let hidden=benchmark.as_ref().is_some_and(|b|b.hidden);
+    let benchmark = if preview {
+        None
+    } else {
+        crate::blade_benchmark::config().map_err(|e| eframe::Error::AppCreation(e.into()))?
+    };
+    let hidden = benchmark.as_ref().is_some_and(|b| b.hidden);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_icon(crate::load_icon())
@@ -606,11 +616,15 @@ fn run_with_preview(preview: bool) -> Result<(), eframe::Error> {
         "R-Helper Blade 18",
         options,
         Box::new(move |cc| {
-            let mut app=if preview { BladeApp::preview(cc) } else { BladeApp::new(cc) };
-            if let Some(config)=benchmark {
-                use raw_window_handle::{HasWindowHandle,RawWindowHandle};
-                let hwnd=match cc.window_handle().map(|h|h.as_raw()){Ok(RawWindowHandle::Win32(h))=>h.hwnd.get(),_=>0};
-                app.benchmark_exit=Some(crate::blade_benchmark::start(config,cc.egui_ctx.clone(),hwnd));
+            let mut app = if preview { BladeApp::preview(cc) } else { BladeApp::new(cc) };
+            if let Some(config) = benchmark {
+                use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                let hwnd = match cc.window_handle().map(|h| h.as_raw()) {
+                    Ok(RawWindowHandle::Win32(h)) => h.hwnd.get(),
+                    _ => 0,
+                };
+                app.benchmark_exit =
+                    Some(crate::blade_benchmark::start(config, cc.egui_ctx.clone(), hwnd));
             }
             Ok(Box::new(app))
         }),

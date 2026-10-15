@@ -616,8 +616,12 @@ fn validate_fan_targets(
                 thread::sleep(Duration::from_secs(5));
                 let observed = read(&device)?;
                 ensure!(ac_connected()?, "AC disconnected; restoring captured fan settings");
-                ensure!(observed.performance == PerfMode::Balanced && observed.fan_mode == FanMode::Manual && observed.fan_setpoints == targets,
-                    "Fan mode or targets changed outside validation; restoring captured settings");
+                ensure!(
+                    observed.performance == PerfMode::Balanced
+                        && observed.fan_mode == FanMode::Manual
+                        && observed.fan_setpoints == targets,
+                    "Fan mode or targets changed outside validation; restoring captured settings"
+                );
                 if observed
                     .fan_actual
                     .iter()
@@ -631,8 +635,10 @@ fn validate_fan_targets(
                 if full_thermal {
                     let thermal = crate::thermal::read(&device)?;
                     ensure!(
-                        thermal.ec_celsius[0] > 0 && thermal.ec_celsius[0] < 90
-                            && thermal.ec_celsius[1] > 0 && thermal.ec_celsius[1] < 80,
+                        thermal.ec_celsius[0] > 0
+                            && thermal.ec_celsius[0] < 90
+                            && thermal.ec_celsius[1] > 0
+                            && thermal.ec_celsius[1] < 80,
                         "Thermal guard reached; restoring captured settings"
                     );
                     report["thermal_samples"]

@@ -38,10 +38,14 @@ impl Packet {
     /// Blade standard-matrix protocol uses transaction FF and the usual XOR CRC.
     pub(crate) fn blade_matrix_framing(mut self) -> Result<Self> {
         self.ensure_blade18_access()?;
-        ensure!((self.command_class==3 && matches!(self.command_id,0x0a|0x0b)) || (self.command_class==0 && self.command_id==4),"Not a native lighting command");
-        self.id=0xff;
-        let bytes=bincode::serialize(&self)?;
-        self.crc=bytes[2..88].iter().fold(0,|crc,byte|crc^byte);
+        ensure!(
+            (self.command_class == 3 && matches!(self.command_id, 0x0a | 0x0b))
+                || (self.command_class == 0 && self.command_id == 4),
+            "Not a native lighting command"
+        );
+        self.id = 0xff;
+        let bytes = bincode::serialize(&self)?;
+        self.crc = bytes[2..88].iter().fold(0, |crc, byte| crc ^ byte);
         Ok(self)
     }
     pub(crate) fn ensure_fan_lab_access(&self) -> Result<()> {
@@ -83,9 +87,15 @@ impl Packet {
             }
             // Standard matrix encoder: this RB18's Razer driver logs seven
             // rows. Fixed frame FF, columns 0..18; no variable storage or scan.
-            0x030a => args==[5,0],
-            0x0004 => matches!(args,[0|3,0]),
-            0x030b => args.len()==70 && args[0]==0xff && args[1]<=6 && args[2..4]==[0,18] && args[61..].iter().all(|v|*v==0),
+            0x030a => args == [5, 0],
+            0x0004 => matches!(args, [0 | 3, 0]),
+            0x030b => {
+                args.len() == 70
+                    && args[0] == 0xff
+                    && args[1] <= 6
+                    && args[2..4] == [0, 18]
+                    && args[61..].iter().all(|v| *v == 0)
+            }
             0x0300 if matches!(args, [1, 38, 0 | 1]) => true,
             0x0303 => matches!(args, [1, 38, _]),
             0x0300 => matches!(args, [1, 4, 0 | 1]),
@@ -125,10 +135,10 @@ impl Packet {
             // no remapping, test mode, reset, firmware or selector scans.
             0x0088 => args == [0; 4],
             0x0389 => args == [0; 80],
-            0x038e => args.len()==80 && args[..2]==[1,38] && args[2..].iter().all(|v|*v==0),
+            0x038e => args.len() == 80 && args[..2] == [1, 38] && args[2..].iter().all(|v| *v == 0),
             0x0286 => matches!(args, [0 | 1, 0]),
             0x02a8 | 0x02a4 => args == [0],
-            0x02a7 => args.len()==15 && args[0]==1 && args[1..].iter().all(|v|*v==0),
+            0x02a7 => args.len() == 15 && args[0] == 1 && args[1..].iter().all(|v| *v == 0),
             0x00dd => args == [1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             0x00da => args == [1, 0, 0],
             0x0f86 => args == [1, 0],
@@ -146,7 +156,9 @@ impl Packet {
             // Shared Razer module declares the 80-byte getter adjacent to the
             // fan-table setter. Request header is a single, explicitly inferred
             // class-0 / fan-1 / curve-0 candidate; no selector or class sweep.
-            0x0d84 => args.len()==80 && args[..3]==[0,1,0] && args[3..].iter().all(|v|*v==0),
+            0x0d84 => {
+                args.len() == 80 && args[..3] == [0, 1, 0] && args[3..].iter().all(|v| *v == 0)
+            }
             0x0d8a | 0x0d8b => args == [0, 0],
             0x0d89 => args == [0, 0],
             0x0d8e | 0x0f98 => args == [0],
@@ -283,42 +295,53 @@ impl TryFrom<&[u8]> for Packet {
 mod diagnostic_tests {
     #[test]
     fn inferred_fan_table_probe_is_read_only_and_exactly_scoped() {
-        let mut args=vec![0;80];args[1]=1;
-        Packet::new(0x0d84,&args).ensure_diagnostic_query().unwrap();
-        assert!(Packet::new(0x0d04,&args).ensure_blade18_access().is_err());
-        for index in [0,1,2,3,79] {let mut invalid=args.clone();invalid[index]=invalid[index].wrapping_add(1);assert!(Packet::new(0x0d84,&invalid).ensure_diagnostic_query().is_err());}
-        assert!(Packet::new(0x0d84,&args[..3]).ensure_diagnostic_query().is_err());
+        let mut args = vec![0; 80];
+        args[1] = 1;
+        Packet::new(0x0d84, &args).ensure_diagnostic_query().unwrap();
+        assert!(Packet::new(0x0d04, &args).ensure_blade18_access().is_err());
+        for index in [0, 1, 2, 3, 79] {
+            let mut invalid = args.clone();
+            invalid[index] = invalid[index].wrapping_add(1);
+            assert!(Packet::new(0x0d84, &invalid).ensure_diagnostic_query().is_err());
+        }
+        assert!(Packet::new(0x0d84, &args[..3]).ensure_diagnostic_query().is_err());
     }
     #[test]
     fn standard_blade_matrix_framing_is_scoped_and_bounded() {
-        let mut row=[0;70];row[..4].copy_from_slice(&[0xff,6,0,18]);
+        let mut row = [0; 70];
+        row[..4].copy_from_slice(&[0xff, 6, 0, 18]);
         row[4..61].fill(128);
-        let packet=super::Packet::new(0x030b,&row).blade_matrix_framing().unwrap();
-        assert_eq!(packet.id,0xff);
-        let bytes=bincode::serialize(&packet).unwrap();
-        assert_eq!(packet.crc,bytes[2..88].iter().fold(0,|crc,byte|crc^byte));
-        assert!(super::Packet::new(0x030a,&[5,0]).blade_matrix_framing().is_ok());
-        for mode in [0,3] {assert!(super::Packet::new(0x0004,&[mode,0]).blade_matrix_framing().is_ok());}
-        assert!(super::Packet::new(0x0004,&[1,0]).ensure_blade18_access().is_err());
-        assert!(super::Packet::new(0x0004,&[3,1]).ensure_blade18_access().is_err());
-        assert!(super::Packet::new(0x0004,&[3,0]).ensure_diagnostic_query().is_err());
-        for (offset,value) in [(0,0),(1,7),(2,1),(3,19),(61,1)]{
-            let mut bad=row;bad[offset]=value;
-            assert!(super::Packet::new(0x030b,&bad).ensure_blade18_access().is_err());
+        let packet = super::Packet::new(0x030b, &row).blade_matrix_framing().unwrap();
+        assert_eq!(packet.id, 0xff);
+        let bytes = bincode::serialize(&packet).unwrap();
+        assert_eq!(packet.crc, bytes[2..88].iter().fold(0, |crc, byte| crc ^ byte));
+        assert!(super::Packet::new(0x030a, &[5, 0]).blade_matrix_framing().is_ok());
+        for mode in [0, 3] {
+            assert!(super::Packet::new(0x0004, &[mode, 0]).blade_matrix_framing().is_ok());
         }
-        assert!(super::Packet::new(0x030a,&[5,1]).ensure_blade18_access().is_err());
-        assert!(super::Packet::new(0x0d01,&[0,1,40]).blade_matrix_framing().is_err());
-        assert!(super::Packet::new(0x030b,&row).ensure_diagnostic_query().is_err());
+        assert!(super::Packet::new(0x0004, &[1, 0]).ensure_blade18_access().is_err());
+        assert!(super::Packet::new(0x0004, &[3, 1]).ensure_blade18_access().is_err());
+        assert!(super::Packet::new(0x0004, &[3, 0]).ensure_diagnostic_query().is_err());
+        for (offset, value) in [(0, 0), (1, 7), (2, 1), (3, 19), (61, 1)] {
+            let mut bad = row;
+            bad[offset] = value;
+            assert!(super::Packet::new(0x030b, &bad).ensure_blade18_access().is_err());
+        }
+        assert!(super::Packet::new(0x030a, &[5, 1]).ensure_blade18_access().is_err());
+        assert!(super::Packet::new(0x0d01, &[0, 1, 40]).blade_matrix_framing().is_err());
+        assert!(super::Packet::new(0x030b, &row).ensure_diagnostic_query().is_err());
     }
     #[test]
     fn underside_color_table_remains_a_fixed_read_only_query() {
-        let mut data=[0;80];data[..2].copy_from_slice(&[1,38]);
-        assert!(super::Packet::new(0x038e,&data).ensure_diagnostic_query().is_ok());
-        assert!(super::Packet::new(0x030e,&data).ensure_blade18_access().is_err());
-        assert!(super::Packet::new(0x030c,&data).ensure_blade18_access().is_err());
-        for index in [0,1,2,79] {
-            let mut invalid=data;invalid[index]^=1;
-            assert!(super::Packet::new(0x038e,&invalid).ensure_diagnostic_query().is_err());
+        let mut data = [0; 80];
+        data[..2].copy_from_slice(&[1, 38]);
+        assert!(super::Packet::new(0x038e, &data).ensure_diagnostic_query().is_ok());
+        assert!(super::Packet::new(0x030e, &data).ensure_blade18_access().is_err());
+        assert!(super::Packet::new(0x030c, &data).ensure_blade18_access().is_err());
+        for index in [0, 1, 2, 79] {
+            let mut invalid = data;
+            invalid[index] ^= 1;
+            assert!(super::Packet::new(0x038e, &invalid).ensure_diagnostic_query().is_err());
         }
     }
     use super::Packet;

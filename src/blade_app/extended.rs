@@ -153,22 +153,50 @@ impl BladeApp {
         }
         super::view::card(ui, "BIOS, firmware + drivers", |ui| {
             ui.horizontal_wrapped(|ui| {
-                if ui.add_enabled(enabled, egui::Button::new("Read installed versions")).clicked() {updates=Some(false);}
-                if ui.add_enabled(enabled, egui::Button::new("Check official catalog")).clicked() {updates=Some(true);}
+                if ui.add_enabled(enabled, egui::Button::new("Read installed versions")).clicked() {
+                    updates = Some(false);
+                }
+                if ui.add_enabled(enabled, egui::Button::new("Check official catalog")).clicked() {
+                    updates = Some(true);
+                }
             });
             ui.hyperlink_to("Razer Blade 18 (2025) downloads", crate::blade_updates::SOURCE);
-            if let Some(report)=&self.updates_report {
-                ui.small(report["catalog"]["verified"].as_str().unwrap_or("Catalog source unavailable"));
-                if let Some(checked)=report["catalog"]["checked_unix"].as_u64() {
-                    let now=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
-                    ui.small(format!("Last successful catalog check: {} minutes ago",now.saturating_sub(checked)/60));
+            if let Some(report) = &self.updates_report {
+                ui.small(
+                    report["catalog"]["verified"].as_str().unwrap_or("Catalog source unavailable"),
+                );
+                if let Some(checked) = report["catalog"]["checked_unix"].as_u64() {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    ui.small(format!(
+                        "Last successful catalog check: {} minutes ago",
+                        now.saturating_sub(checked) / 60
+                    ));
                 }
-                if let Some(error)=report["check_error"].as_str() {ui.label("Online check unavailable · previous catalog retained");ui.collapsing("Check details",|ui|{ui.small(error);});}
-                if report["firmware_error"].is_string() {ui.small("Some installed firmware versions are unavailable; the installed Razer helper may be missing.");}
+                if let Some(error) = report["check_error"].as_str() {
+                    ui.label("Online check unavailable · previous catalog retained");
+                    ui.collapsing("Check details", |ui| {
+                        ui.small(error);
+                    });
+                }
+                if report["firmware_error"].is_string() {
+                    ui.small("Some installed firmware versions are unavailable; the installed Razer helper may be missing.");
+                }
                 for row in report["rows"].as_array().into_iter().flatten() {
                     ui.separator();
-                    ui.label(format!("{} · installed {} → catalog {}",row["component"].as_str().unwrap_or("Firmware"),row["installed"].as_str().unwrap_or("unknown"),row["available"].as_str().unwrap_or("unknown")));
-                    ui.small(format!("{} · released {}",row["status"].as_str().unwrap_or("Check official page"),row["released"].as_str().unwrap_or("unknown")));
+                    ui.label(format!(
+                        "{} · installed {} → catalog {}",
+                        row["component"].as_str().unwrap_or("Firmware"),
+                        row["installed"].as_str().unwrap_or("unknown"),
+                        row["available"].as_str().unwrap_or("unknown")
+                    ));
+                    ui.small(format!(
+                        "{} · released {}",
+                        row["status"].as_str().unwrap_or("Check official page"),
+                        row["released"].as_str().unwrap_or("unknown")
+                    ));
                     ui.small(row["notes"].as_str().unwrap_or(""));
                 }
                 ui.collapsing("Installed driver versions",|ui|{
@@ -176,11 +204,15 @@ impl BladeApp {
                     for source in report["driver_sources"].as_array().into_iter().flatten(){if let (Some(name),Some(url))=(source["name"].as_str(),source["url"].as_str()){ui.hyperlink_to(name,url);}}
                     ui.small("Choose the laptop GPU and Windows version on the official site; no automatic driver-version comparison yet.");
                 });
-            } else {ui.small("Read installed versions to compare with the dated reference catalog, or check the official catalog on demand.");}
+            } else {
+                ui.small("Read installed versions to compare with the dated reference catalog, or check the official catalog on demand.");
+            }
             ui.small("Model RZ09-0529 · manual updates only. Review the official instructions and exact SKU before installing. No background update checks.");
         });
-        if let Some(refresh)=updates {
-            self.batch_job(ctx, "Check firmware and driver versions",move || Ok(serde_json::json!({"updates_inventory":crate::blade_updates::inspect(refresh)?})));
+        if let Some(refresh) = updates {
+            self.batch_job(ctx, "Check firmware and driver versions", move || {
+                Ok(serde_json::json!({"updates_inventory":crate::blade_updates::inspect(refresh)?}))
+            });
         }
         super::view::card(ui, "Platform capabilities", |ui| {
             if ui
