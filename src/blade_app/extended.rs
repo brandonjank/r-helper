@@ -73,7 +73,7 @@ impl BladeApp {
                 });
                 ui.horizontal_wrapped(|ui|{ui.checkbox(&mut self.lamp_highlight,"Highlight one lamp in orange");if self.lamp_highlight{ui.add(egui::DragValue::new(&mut self.lamp_index).range(1..=18).prefix("Lamp "));}});
                 if ui.button("Open Windows lighting settings").clicked(){let _=std::process::Command::new("explorer.exe").arg("ms-settings:personalization-lighting").spawn();}
-                super::view::hint(ui,"The logo is green-only. The 18 reported auxiliary lamps remain unmapped. This test requires a static keyboard effect, opens a temporary window, then reapplies your saved lighting. R-Helper stays hidden in the tray afterward. Physical RGB behavior is unverified.");
+                super::view::hint(ui,"The logo is green-only. The 18 reported auxiliary lamps remain unmapped. This test requires a static keyboard effect, temporarily powers the underside at a brighter setting, opens a test window, then restores your saved lighting and underside power. R-Helper stays hidden in the tray afterward. Physical RGB behavior is unverified.");
             });
         });
         if read_lamps {

@@ -57,6 +57,9 @@ terminates a test that exceeds 25 seconds. Reports distinguish API acceptance,
 firmware readback and required physical confirmation. Original LampArray pixels
 cannot be captured, and exact Windows ambient colors are not claimed as backed up.
 Static-only testing avoids inventing a backup of dynamic effects or per-key pixels.
+The test also temporarily enables the separate underside power gate and raises
+its brightness to at least 200/255 after recovery is armed, before starting the
+foreground preview. Both original gate and brightness are restored afterward.
 
 This preview is not a complete background RGB implementation. Microsoft's ambient
 background lighting contract requires packaged app identity and a lighting app
@@ -90,13 +93,35 @@ The owner also confirmed blue returned and stayed blue after sleep/wake with
 R-Helper hidden and AC connected.
 Keep this interface experimental pending mapping and ownership investigation.
 
-The isolated-window cleanup and keyboard seeding are implemented following these
-observations. Their physical behavior still needs a fresh owner test; earlier
-failed blue/red previews are not retroactively counted as passing.
+The isolated-window cleanup and keyboard seeding were retested by the owner:
+the keyboard stayed blue, while the underside did not turn on. The test window
+reported API acceptance, exited, and the parent restored the saved firmware
+preset without error; the backup helper disarmed normally. This validates the
+keyboard-preservation fix, not auxiliary RGB control. Earlier failed blue/red
+previews are not retroactively counted as passing.
 The new standalone recovery helper passed both a completed-parent cancellation
 check (no fallback write) and a real 45-second fallback reapplication of the saved
-blue preset with firmware readback. This validates timed recovery, not yet the
-complete isolated foreground test or its visible restoration.
+blue preset with firmware readback. The subsequent isolated foreground test also
+completed restoration successfully, with the keyboard remaining visibly blue.
+The owner then physically confirmed the existing underside switch and brightness
+control: enabling it at 200/255 lit all underside LEDs blue while the keyboard
+stayed blue. Independent timed restoration returned it to the original off state.
+The subsequent attempted red comparison produced no new preview record, so it
+does not establish whether RGB commands work with underside power enabled. The
+power gate is now integrated into the test to remove that external timing window;
+this integrated path still needs a fresh physical comparison.
+The automatic integrated red batch subsequently completed: underside power-on at
+200/255 passed readback, the foreground helper accepted red (`#FF2020`) with the
+keyboard seeded blue, the owner process exited, firmware restoration passed, and
+Razer services returned to their original running states. The backup lighting
+helper disarmed without fallback. Physical red-vs-blue confirmation is pending.
+
+An explicit `--auxiliary-test <request.json> <new-output.json>` entry point runs
+the same bounded test with temporary, reversible Razer service ownership. It
+requires administrator access for takeover and a validated static-lighting request.
+It records preview/restoration outcomes, restores vendor software when finished,
+and uses the same independent lighting and vendor recovery helpers. This permits
+the owner to approve UAC and observe one automatic test without racing tray clicks.
 
 The fixed inventory probes 19 audited getter shapes. It does not scan command IDs,
 LED IDs or device modes. Results are saved privately in ignored local reports.

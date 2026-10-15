@@ -90,6 +90,12 @@ pub fn run(rgb: [u8; 3], highlight: Option<u8>, path: &Path) -> Result<serde_jso
     }
     let output = path.with_extension("preview.json");
     let preview = (|| -> Result<serde_json::Value> {
+        // LampArray writes do not enable the separate underside power gate.
+        // Recovery retains its original power and brightness values.
+        let mut powered = request.preset.clone();
+        powered.underside = true;
+        powered.underside_brightness = powered.underside_brightness.max(200);
+        powered.apply(&path.with_extension("power-on.json"))?;
         let mut child = command("--auxiliary-preview", path, &output)?.spawn()?;
         let start = Instant::now();
         let status = loop {
@@ -139,7 +145,7 @@ pub fn run(rgb: [u8; 3], highlight: Option<u8>, path: &Path) -> Result<serde_jso
 pub fn dispatch() -> Option<Result<()>> {
     let args = std::env::args().collect::<Vec<_>>();
     let mode = args.get(1)?.as_str();
-    if !matches!(mode, "--auxiliary-preview" | "--auxiliary-recover") {
+    if !matches!(mode, "--auxiliary-preview" | "--auxiliary-recover" | "--auxiliary-test") {
         return None;
     }
     Some((|| {
@@ -148,6 +154,25 @@ pub fn dispatch() -> Option<Result<()>> {
         let path = PathBuf::from(&args[2]);
         let output = PathBuf::from(&args[3]);
         let request = load(&path)?;
+        if mode == "--auxiliary-test" {
+            // Explicit, bounded diagnostic entry point. Keep reversible vendor
+            // ownership local to this batch rather than a persistent GUI session.
+            let mut ownership = crate::blade_vendor::Session::start()?;
+            let preview = run(request.rgb, request.highlight, &output);
+            let release = ownership.stop();
+            save(
+                &output.with_extension("batch-result.json"),
+                &serde_json::json!({
+                    "preview": preview.as_ref().ok(),
+                    "preview_error": preview.as_ref().err().map(|e|format!("{e:#}")),
+                    "vendor_restored": release.is_ok(),
+                    "vendor_restore_error": release.as_ref().err().map(|e|format!("{e:#}"))
+                }),
+            )?;
+            release?;
+            preview?;
+            return Ok(());
+        }
         if mode == "--auxiliary-recover" {
             save(&path.with_extension("ready"), &true)?;
             let start = Instant::now();
