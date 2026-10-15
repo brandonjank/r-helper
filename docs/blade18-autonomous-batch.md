@@ -77,8 +77,13 @@ The new `--native-cell-markers-test REQUEST OUTPUT` helper shows logical undersi
 cells 1/10/19 as red/green/blue, other cells dark, and a blue keyboard for 20 seconds.
 The first run (`native-markers-20261014-195659`) passed profile capture/roundtrip,
 restored original lighting and Firmware mode, and restored vendor software.
-Physical marker positions await the observer's report; command acceptance does
-not establish LED positions. This review does not resolve the research-only
+The owner reported red cell 1 and green cell 10 visible, with blue cell 19 dark.
+The adjacent-cell repeat (`native-cell18-20261014-195953`) moved blue to cell 18;
+the owner confirmed the result was correct. Original lighting, Firmware mode and
+vendor services restored. This confirms three visible marker slots, not every
+intermediate LED or spatial direction. Slot 19 may be unused and is labelled as
+dark in testing in the editor. For repeats, optional request `highlight` selects
+the blue slot (2–18, excluding 10); omission selects 19. This review does not resolve the research-only
 controls or remaining physical checks listed below.
 
 ## Remaining controls and the reason they are not enabled

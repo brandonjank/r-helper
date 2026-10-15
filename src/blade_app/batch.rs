@@ -151,8 +151,8 @@ impl BladeApp {
                     if ui.checkbox(&mut mapped,"Paint underside cells · experimental").changed(){self.batch.draft.underside_keys=mapped.then(||vec![color;19]);}
                     if let Some(keys)=&mut self.batch.draft.underside_keys {
                         ui.horizontal(|ui|{if ui.button("Fill underside").clicked(){keys.fill(color);}if ui.button("Alternate underside cells").clicked(){for(i,key)in keys.iter_mut().enumerate(){*key=if i%2==0{color}else{self.batch.draft.second};}}});
-                        ui.horizontal_wrapped(|ui|{for(index,key)in keys.iter_mut().enumerate(){if ui.add_sized([16.0,16.0],egui::Button::new("").fill(egui::Color32::from_rgb(key[0],key[1],key[2]))).on_hover_text(format!("Native cell {} · physical position unconfirmed",index+1)).clicked(){*key=color;}}});
-                        ui.small("Native frame has 19 cells. Physical LED order and unused cells still need observation.");
+                        ui.horizontal_wrapped(|ui|{for(index,key)in keys.iter_mut().enumerate(){let status=if index==18{"no visible light in marker test"}else if matches!(index,0|9|17){"visible in marker test"}else{"physical position unconfirmed"};if ui.add_sized([16.0,16.0],egui::Button::new("").fill(egui::Color32::from_rgb(key[0],key[1],key[2]))).on_hover_text(format!("Native cell {} · {status}",index+1)).clicked(){*key=color;}}});
+                        ui.small("Cells 1, 10 and 18 were visible in testing; cell 19 stayed dark and may be unused. Other positions remain unconfirmed.");
                     }
                 }
                 ui.add(egui::Slider::new(&mut self.batch.draft.underside_brightness,0..=255).text("Underside brightness"));

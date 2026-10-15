@@ -349,6 +349,10 @@ pub fn dispatch() -> Option<Result<()>> {
             return result;
         }
         if mode == "--native-profile-test" || mode == "--native-cell-markers-test" {
+            let blue_cell = usize::from(request.highlight.unwrap_or(19));
+            if mode == "--native-cell-markers-test" {
+                ensure!(!matches!(blue_cell, 1 | 10), "Blue marker overlaps red or green");
+            }
             let original = Preset::capture(&blade18::lighting::status()?, blade18::status()?.logo)?;
             let mut ownership = crate::blade_vendor::Session::start()?;
             let applied = (|| -> Result<serde_json::Value> {
@@ -363,7 +367,7 @@ pub fn dispatch() -> Option<Result<()>> {
                     let mut cells = vec![[0, 0, 0]; 19];
                     cells[0] = [255, 0, 0];
                     cells[9] = [0, 255, 0];
-                    cells[18] = [0, 0, 255];
+                    cells[blue_cell - 1] = [0, 0, 255];
                     preset.underside_keys = Some(cells);
                 }
                 preset.apply(&output.with_extension("apply.json"))?;
@@ -379,7 +383,7 @@ pub fn dispatch() -> Option<Result<()>> {
                 )?;
                 std::thread::sleep(Duration::from_secs(20));
                 Ok(
-                    serde_json::json!({"profile_roundtrip":true,"keyboard":"blue","underside":if mode == "--native-cell-markers-test" {"cells 1 red, 10 green, 19 blue; others dark"} else {"red"},"physical_mapping_verified":false,"continuous_frames":false}),
+                    serde_json::json!({"profile_roundtrip":true,"keyboard":"blue","underside":if mode == "--native-cell-markers-test" {format!("cells 1 red, 10 green, {blue_cell} blue; others dark")} else {"red".into()},"physical_mapping_verified":false,"continuous_frames":false}),
                 )
             })();
             let released = ownership.stop();

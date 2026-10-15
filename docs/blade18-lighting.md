@@ -168,5 +168,8 @@ not an RGB zone. Raw machine logs and diagnostic journals remain local.
 The next batch extends independent native color to keyboard Per-key mode and an
 optional 19-cell underside map, both saved in profiles. An underside map requires
 independent color and exactly 19 RGB cells. The logical native row may include
-unused cells; physical ordering is unconfirmed. No animation loop is added.
+unused cells. Marker tests confirmed visible cells 1, 10 and 18; cell 19 stayed
+dark. Other individual positions and spatial direction remain unconfirmed.
+Original lighting and vendor software restored after both marker patterns.
+No animation loop is added.
 See the [autonomous batch](blade18-autonomous-batch.md) for current test status.
