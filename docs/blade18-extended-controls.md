@@ -120,10 +120,13 @@ auxiliary RGB validation failed**, despite successful power-on readback before
 foreground ownership began. A standalone native underside power test worked;
 the difference is associated with the foreground LampArray path, but the exact
 cause is unresolved. Do not claim underside RGB support or infer a lamp mapping.
-The next diagnostic candidate records native lighting switches/brightness/effect
-metadata and the firmware Chroma flag immediately after LampArray acquisition
-and after its buffered color update. These are read-only handoff checks; they
-distinguish a native switch change from an unchanged switch with no visible light.
+The diagnostic repeat captured native lighting state immediately after LampArray
+acquisition and after its buffered color update: underside stayed on at 200/255,
+Chroma flag stayed 1, and the keyboard was in custom-frame mode (effect 8) at both
+points. There is no evidence of the native underside switch being turned off.
+These are metadata readings, not proof of visible pixels. Lighting and vendor
+restoration passed again; the root cause of the failed underside output remains
+unresolved.
 
 An explicit `--auxiliary-test <request.json> <new-output.json>` entry point runs
 the same bounded test with temporary, reversible Razer service ownership. It
@@ -132,7 +135,7 @@ It records preview/restoration outcomes, restores vendor software when finished,
 and uses the same independent lighting and vendor recovery helpers. This permits
 the owner to approve UAC and observe one automatic test without racing tray clicks.
 
-The fixed inventory probes 19 audited getter shapes. It does not scan command IDs,
+The fixed inventory probes 20 audited getter shapes. It does not scan command IDs,
 LED IDs or device modes. Results are saved privately in ignored local reports.
 
 | Lead | Result / disposition |
@@ -145,6 +148,7 @@ LED IDs or device modes. Results are saved privately in ignored local reports.
 | Spectrum | Both the earlier padded request and a corrected six-byte request failed to apply. The last static effect remained. Excluded from presets and the setter allowlist. |
 | Fast Wave | Speed 16 request read back 40. The alternate speed is ignored and remains blocked. Normal speed 40 is retained. |
 | Legacy LED inventory | Two entries: keyboard RGB and logo PWM. It adds no extra legacy LED IDs; the separate LampArray carries the new auxiliary lead. |
+| Native underside color table | Shared protocol getter `038e`, class 1 / known underside region 38, fixed 80-byte request returned NotSupported. No color-table setter enabled. Shared library also defines Lighting Bar Pattern `030c` and Color Table Definition `030e`, but these lack model-specific caller/mapping and remain blocked. |
 | Firmware fan tables / voltage / MUX / panel-resolution writes | Existing leads still lack validated recovery or model semantics. Not enabled by this batch. |
 | Battery Saver | The existing BIOS/EC/VBIOS gate is not satisfied by BIOS 2.01. No forced enable. |
 | Other Razer device IDs | Present-device inventory found only VID 1532/PID 02c7; no present VID 1534 device. |
@@ -183,7 +187,7 @@ against the pre-takeover baseline found no differences. The guard reported
 
 ## Validation and return-to-desk batch
 
-The complete workspace suite passes **68 tests** after the ownership cleanup. The optimized Windows build
+The complete workspace suite passes **69 tests** after the ownership cleanup and fixed-getter boundary test. The optimized Windows build
 passes. Clippy completes with existing repository warnings; a strict warnings-as-
 errors pass is not clean, and no new-module lint warning remains.
 
@@ -232,3 +236,4 @@ LampArray previews experimental until mapping and visible restoration are fixed.
 - [Microsoft Dynamic Lighting documentation](https://learn.microsoft.com/en-us/windows/apps/develop/devices-sensors/lighting-dynamic-lamparray): priority, autonomous behavior and background identity requirements.
 - [Microsoft LampArray API](https://learn.microsoft.com/en-us/uwp/api/windows.devices.lights.lamparray): metadata and explicitly indexed colors.
 - [Microsoft LampArray.IsEnabled](https://learn.microsoft.com/en-us/uwp/api/windows.devices.lights.lamparray.isenabled): buffered updates while disabled and flush on enable; disabling alone is not an ownership-release guarantee.
+- [Razer Blade 18 Synapse master guide](https://dl.razerzone.com/master-guides/RazerSynapse4/Blade18-00000711-en.pdf): lighting controls, Vapor Chamber Lighting and Chroma Studio.

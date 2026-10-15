@@ -186,6 +186,11 @@ pub fn inventory() -> Result<serde_json::Value> {
     for (name, command, data) in [
         ("device_mode", 0x0084, vec![0, 0]),
         ("legacy_led_inventory", 0x0389, vec![0; 80]),
+        // Shared protocol Get LED Color Table Definition; fixed known underside
+        // region only. Its corresponding setter is deliberately not allowed.
+        ("underside_color_table", 0x038e, {
+            let mut data=vec![0;80];data[..2].copy_from_slice(&[1,38]);data
+        }),
         ("gaming_key_flags", 0x0088, vec![0; 4]),
         ("fn_primary_volatile", 0x0286, vec![0, 0]),
         ("fn_primary_persistent", 0x0286, vec![1, 0]),

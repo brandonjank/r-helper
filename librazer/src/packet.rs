@@ -111,6 +111,7 @@ impl Packet {
             // no remapping, test mode, reset, firmware or selector scans.
             0x0088 => args == [0; 4],
             0x0389 => args == [0; 80],
+            0x038e => args.len()==80 && args[..2]==[1,38] && args[2..].iter().all(|v|*v==0),
             0x0286 => matches!(args, [0 | 1, 0]),
             0x02a8 | 0x02a4 => args == [0],
             0x00dd => args == [1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -261,6 +262,17 @@ impl TryFrom<&[u8]> for Packet {
 
 #[cfg(test)]
 mod diagnostic_tests {
+    #[test]
+    fn underside_color_table_remains_a_fixed_read_only_query() {
+        let mut data=[0;80];data[..2].copy_from_slice(&[1,38]);
+        assert!(super::Packet::new(0x038e,&data).ensure_diagnostic_query().is_ok());
+        assert!(super::Packet::new(0x030e,&data).ensure_blade18_access().is_err());
+        assert!(super::Packet::new(0x030c,&data).ensure_blade18_access().is_err());
+        for index in [0,1,2,79] {
+            let mut invalid=data;invalid[index]^=1;
+            assert!(super::Packet::new(0x038e,&invalid).ensure_diagnostic_query().is_err());
+        }
+    }
     use super::Packet;
     #[test]
     fn feature_batch_writes_are_bounded_to_keyboard_and_charge_bit_patterns() {
