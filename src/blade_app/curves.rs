@@ -19,12 +19,12 @@ impl BladeApp {
                     ui.label(format!("EC A {}°C · EC B {}°C · targets {:?}",sample.ec_celsius[0],sample.ec_celsius[1],sample.target_rpm));
                 }
             }
-            ui.label(RichText::new("AC + Balanced · physical fan roles unresolved · EC readings are proxies").small().color(Color32::from_gray(170)));
+            ui.label(RichText::new("AC + Balanced · airflow locations mapped · EC readings remain proxies").small().color(Color32::from_gray(170)));
             ui.collapsing("Edit curves",|ui|{
                 ui.add_enabled_ui(!active&&idle,|ui|{
                     for (index,zone) in self.curve_settings.zones.iter_mut().enumerate(){
                         ui.push_id(index,|ui|{
-                            ui.separator();ui.label(RichText::new(format!("Fan {}",index+1)).strong());
+                            ui.separator();ui.label(RichText::new(format!("Fan {} · {}",index+1,["left rear","right rear","center / battery area"][index])).strong());
                             egui::ComboBox::from_id_salt("source").selected_text(zone.source.label()).show_ui(ui,|ui|{
                                 for source in [blade18::CurveSource::EcA,blade18::CurveSource::EcB,blade18::CurveSource::Hottest]{ui.selectable_value(&mut zone.source,source,source.label());}
                             });
@@ -59,8 +59,9 @@ impl BladeApp {
                 if ui.add_enabled(!self.preview&&!active&&idle&&valid.is_ok()&&self.curve_error.is_none(),egui::Button::new("Save curves")).clicked(){self.message=match crate::blade_curves::save(&self.curve_settings){Ok(())=>"Curves saved; automatic startup remains off".into(),Err(error)=>format!("Could not save curves: {error:#}")};}
                 let ready=!self.preview&&!active&&idle&&valid.is_ok()&&self.last_power==Some(true)&&self.state.as_ref().is_some_and(|s|s.performance==PerfMode::Balanced&&s.fan_mode==FanMode::Auto);
                 if ui.add_enabled(ready,egui::Button::new("Start curves")).clicked(){match crate::blade_curves::launch(&self.curve_settings,self.curve_control.clone(),ctx.clone()){Ok(events)=>{self.curve_events=Some(events);self.curve_status=None;self.message="Starting supervised curve session…".into();},Err(error)=>self.message=format!("Could not start curves: {error:#}")}}
-                if ui.add_enabled(active&&idle,egui::Button::new("Stop + automatic")).clicked(){self.start(ctx,"Stop curves",None,blade18::status);}
+                if ui.add_enabled(active&&idle,egui::Button::new("Stop + automatic")).clicked(){self.start(ctx,"Stop curves",None,None,blade18::status);}
             });
+            ui.label(RichText::new("Stop curves before Sleep. On this RB18, manual fan speeds persisted during sleep; automatic cooling returned after wake.").small().color(Color32::from_rgb(255,190,130)));
             ui.label(RichText::new("Stops on sensor/power faults, resume or session timeout. Separate watchdog restores Auto if the app/controller exits.").small().color(Color32::from_gray(170)));
         });
         ui.add_space(4.0);

@@ -88,4 +88,4 @@ finally {
     $result|ConvertTo-Json -Depth 20|Set-Content (Join-Path $directory 'result.json') -Encoding utf8
 }
 if($failure){throw $failure}
-$result|Select-Object mode,ac_dry_run,elapsed_seconds,energy_mwh,average_discharge_watts,battery_energy_valid,matched_display_brightness_power_scheme,process,error|ConvertTo-Json -Depth 4
+[pscustomobject]$result|Select-Object mode,ac_dry_run,elapsed_seconds,energy_mwh,average_discharge_watts,battery_energy_valid,matched_display_brightness_power_scheme,process,error|ConvertTo-Json -Depth 4

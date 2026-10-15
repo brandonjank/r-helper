@@ -287,7 +287,7 @@ pub fn run_curve_session(directory: &Path) -> Result<()> {
     let restored = restore_targets(&device, &original);
     write_value(
         &status_path,
-        &json!({"phase":"stopped","reason":result.as_ref().ok(),"error":result.as_ref().err().map(|e|format!("{e:#}")),"sample":restored.as_ref().ok(),"recovery_error":restored.as_ref().err().map(|e|format!("{e:#}"))}),
+        &json!({"phase":"stopped","captured_unix_ms":SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis(),"reason":result.as_ref().ok(),"error":result.as_ref().err().map(|e|format!("{e:#}")),"sample":restored.as_ref().ok(),"recovery_error":restored.as_ref().err().map(|e|format!("{e:#}"))}),
     )?;
     restored?;
     result?;

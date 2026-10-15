@@ -114,7 +114,141 @@ dated reference and official browser link. No firmware update was attempted.
 Sources: [Razer model catalog](https://mysupport.razer.com/app/answers/detail/a_id/19866),
 [PD release information](https://mysupport.razer.com/app/answers/detail/a_id/20413/kw/settings).
 
-## One guided session still required
+## Guided session record
+
+### Current UI build follow-up (2026-10-14)
+
+PR #5 CI passed both Windows jobs. The live interface was inspected at its default
+window size: Overview, Fans, Lighting, Profiles, Display, Updates and GPU/diagnostics
+were navigable, and sensor/installed-firmware reads completed. One unsupported
+arrow glyph in update comparisons was replaced with a plain separator. No display,
+lighting, fan or performance setting was changed during this inspection. The app
+was exited with its Exit button; original settings matched the captured snapshot.
+
+New AC idle dry runs are **busier than the earlier baseline**, not confirmation
+of the earlier zero-I/O result:
+
+| Sample | CPU seconds / duration | One-core average | Process I/O operations / bytes | HID writes / reads |
+| --- | --- | --- | --- | --- |
+| Hidden initial | 0.359375 / 30 s | 1.198% | 16,166 / 2,332,860 | Not instrumented |
+| Visible initial | 0.1875 / 30 s | 0.625% | 10,138 / 1,460,020 | Not instrumented |
+| Hidden repeat | 0.46875 / 60 s | 0.781% | 19,454 / 2,810,544 | 0 / 0 |
+| Visible repeat | 0.09375 / 30 s | 0.312% | 9,316 / 1,348,712 | 0 / 0 |
+
+Display, brightness, power scheme and settings hashes matched in all four samples.
+Passive process-local counters show no repeated HID reports during the repeat
+windows. Other process I/O is not classified as file, network or graphics traffic
+by this measurement. The CPU variation and unclassified I/O remain open for the
+energy comparison; no battery-drain improvement is claimed. Agent activity and
+the desktop environment were not fully controlled, so these are diagnostic AC
+samples, not a causal comparison. Vendor takeover was skipped as designed.
+
+A closed-app AC dry run also passed with matching display, brightness, power scheme
+and settings hash, zero measured energy change and no battery-energy claim.
+
+The measurement script's console summary now correctly converts its ordered map
+to an object before selecting fields. The saved result JSON was already complete.
+Raw files: `diagnostic-reports/research/current-build-validation/`.
+
+The original snapshot for this session is Performance mode, all fan modes Auto,
+targets `[4500, 0, 0]`, keyboard brightness 176, static logo and battery care enabled.
+Restore this session's actual snapshot after the guided cooling checks; saved power
+profiles are separate and may request different battery-care settings.
+
+After owner-approved elevation, the validation hold paused Game Manager Service 3
+and RGS. The release curve cases Stop, Timeout, WorkerExit, WatchdogExit and
+ParentExit all passed under that hold. Each independently verified all three Auto
+modes and original targets `[4500, 0, 0]`. A final thermal read also confirmed Auto.
+These runs do not establish AC-loss, sleep/resume or physical fan mapping.
+
+The fan harness now accepts `-IdentificationZone 1|2|3` to wrap the existing
+isolated mapping command in its independent parent/deadline recovery guard.
+`-ValidationHoldDirectory` excludes only the recorded hold owner and its single
+guard child from the competing-controller check; the ordinary GUI is still
+rejected. The initial mapping attempt stopped before any fan writes because the
+old check also rejected the hold helper. Missing/zero EC B now aborts both mapping
+warmup and observation, matching the existing EC A check. Selector range and
+PowerShell syntax checks passed; workspace tests and the release build passed
+after the sensor-guard change. Physical observations and completed mapping results are recorded below.
+
+### Guided results
+
+All three isolated mapping runs passed actual-RPM checks and restored their
+captured settings. The independent parent/deadline guard confirmed restoration.
+Owner observations were taken only after three consecutive samples converged
+within 200 RPM of the requested targets:
+
+| Selector | Isolated targets (RPM) | Owner-observed airflow, viewed while typing |
+| --- | --- | --- |
+| 1 | 4500 / 3000 / 3000 | Left rear vent |
+| 2 | 3000 / 4500 / 3000 | Right rear vent |
+| 3 | 3000 / 3000 / 3500 | Center / battery area |
+
+These are airflow-location observations on the tested RB18, not proof of an
+exclusive CPU/GPU cooling assignment or a battery-temperature sensor. Raw
+`owner-observation.json` files accompany the telemetry; the automated harness
+deliberately does not infer physical mapping from RPM alone.
+
+AC-loss recovery passed with independent battery-discharge confirmation, all
+three Auto modes and original targets. EC fields were zero on battery and became
+valid again on AC; zero remains unavailable, not a temperature. After reconnection,
+the controller returned to Performance while the conflicting services were still
+paused. The first sleep invocation refused to start before fan writes because it
+requires Balanced/Auto. Balanced was reselected before retrying.
+
+The first actual sleep attempt exceeded the harness deadline. Its later recovery
+record verified Auto with reason `Controller heartbeat stopped`, but that attempt
+remains a failed harness run. The corrected harness permits an owner-action window
+and, on detecting a sleep-sized pause, gives recovery 45 seconds after wake. The
+repeat passed, recorded a 65.7-second harness pause, and has owner-confirmed sleep.
+Windows reports S0 Low Power Idle / Modern Standby. The owner observed manual
+speeds continuing through sleep, then gradually slowing after wake. Therefore
+**post-wake recovery is verified; pre-suspend restoration is not**. Custom curves
+remain experimental and the UI instructs users to stop curves before Sleep.
+
+The takeover hold ended with `vendor_restored: true` and no hold/restore errors.
+Game Manager Service 3 and RGS returned to Running/Automatic. The original hardware
+snapshot was restored before the battery section and reapplied after reconnecting;
+a delayed final read matched every captured setting except naturally changing RPM.
+All three fan modes were Auto with targets `[4500, 0, 0]`.
+
+### Unplugged battery comparison
+
+The four 300-second phases completed with matching recorded display, brightness,
+power-scheme and settings-hash controls, no power/sampling-gap failure, and valid
+absolute-capacity energy samples. Razer services stayed in their original running
+state; takeover and custom curves were inactive.
+
+| Phase | Whole-laptop discharge | R-Helper CPU, % of one core | HID reports written/read |
+| --- | --- | --- | --- |
+| Closed 1 | 46.50 W | — | — |
+| Hidden 1 | 48.36 W | 0.057% | 0 / 0 |
+| Hidden 2 | 48.91 W | 0.073% | 0 / 0 |
+| Closed 2 | 49.67 W | — | — |
+
+Hidden process I/O was one operation / 48 bytes in the first window and zero in
+the second. The ABBA difference of means is **+0.55 W**, while the two closed
+baselines differ by **3.17 W**. This batch does not establish a statistically
+reliable added-drain value or prove zero GPU wakeups. Background workload, GPU
+residency, firmware performance state and actual keyboard/underside brightness
+were not independently held/measured by the harness. The results support low
+process CPU and no repeated controller traffic; attributing whole-system energy
+requires repeat trials with tighter background/lighting controls.
+
+The final check after AC reconnection found power-transition changes to keyboard
+brightness, performance and GPU boost. Reapplying the original snapshot and
+waiting five seconds produced matching readback. Preserve both the differing
+snapshot and the final restored snapshot; do not treat the transition as evidence
+that the recorded battery controls covered all firmware/lighting state.
+
+Remaining work: restore Auto proactively before Modern Standby, validate a CPU
+die/battery-temperature provider, and repeat energy measurements with tighter
+controls. These are separate from the passed airflow, fault-recovery and
+post-wake checks.
+
+## Repeat procedure
+
+The guided batch above is complete. Keep this procedure for future builds.
 
 Perform physical/load tests on AC first, then the battery comparison last so
 GPU load and fan ramps have time to settle. Save work and keep vents clear.
@@ -126,7 +260,7 @@ GPU load and fan ramps have time to settle. Save work and keep vents clear.
    has a 45-minute limit, and sends no fan/performance commands itself. Its
    `ready.json` marks takeover. Write `release` to its directory after the fan
    section, confirm `finished.json`, and restore the original performance choice
-   after reconnecting AC. This helper's elevated lifecycle remains a guided check.
+   after reconnecting AC. Its elevated lifecycle and restoration passed in the recorded guided session.
 2. Observe separate fan-zone tests, with left/right viewed from the keyboard.
    Use the existing supervised identification tool and its recovery supervisor;
    announce each observation phase only after telemetry confirms convergence.
@@ -156,7 +290,9 @@ GPU load and fan ramps have time to settle. Save work and keep vents clear.
 ./tools/Test-BatteryOverhead.ps1 -OutputDirectory diagnostic-reports/research/new-battery-abba -SecondsPerPhase 300
 ```
 
-Do not mark the physical fan layout, CPU die source, battery/board sensor, sleep
-test or measured battery overhead verified until those distinct checks finish.
+For new builds, keep physical airflow observations, CPU die accuracy, battery/board
+sensors, post-wake recovery and energy attribution as separate claims. The recorded
+run verified the airflow observations and post-wake recovery; CPU die/battery
+sensors and a reliable added-energy attribution remain unresolved.
 Firmware curve-table setters, wider fan limits and unattended/battery fan curves
 remain disabled. BIOS 2.01 remains installed; BIOS work is a separate vendor flow.

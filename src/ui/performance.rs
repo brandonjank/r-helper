@@ -122,7 +122,10 @@ fn render_custom_boosts(
                 };
                 let mut btn = egui::Button::new(style_text);
                 btn = btn.fill(if selected { color } else { Color32::TRANSPARENT }).stroke(
-                    egui::Stroke::new(1.0_f32, if selected { color } else { Color32::from_gray(90) }),
+                    egui::Stroke::new(
+                        1.0_f32,
+                        if selected { color } else { Color32::from_gray(90) },
+                    ),
                 );
                 let response = ui.add_enabled(custom_active, btn);
                 if response.clicked() && !selected {

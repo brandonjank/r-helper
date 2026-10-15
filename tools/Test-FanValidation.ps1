@@ -1,4 +1,11 @@
-param([Parameter(Mandatory)][string]$OutputDirectory,[switch]$Guard,[int]$OwnerId=0)
+param(
+    [Parameter(Mandatory)][string]$OutputDirectory,
+    [switch]$Guard,
+    [int]$OwnerId=0,
+    [ValidateRange(0,3)][int]$IdentificationZone=0,
+    [ValidateRange(20,120)][int]$ObservationSeconds=120,
+    [string]$ValidationHoldDirectory
+)
 $ErrorActionPreference='Stop'
 $root=Split-Path -Parent $PSScriptRoot
 $directory=if([IO.Path]::IsPathRooted($OutputDirectory)){[IO.Path]::GetFullPath($OutputDirectory)}else{[IO.Path]::GetFullPath((Join-Path $root $OutputDirectory))}
@@ -33,7 +40,20 @@ if($Guard){
     if(!$restored){throw $failure};return
 }
 if(Test-Path -LiteralPath $directory){throw 'Choose a new output directory.'}
-if(Get-Process rhelper -ErrorAction SilentlyContinue){throw 'Exit R-Helper before the isolated fan validation.'}
+$controllers=@(Get-CimInstance Win32_Process -Filter "Name = 'rhelper.exe'")
+if($ValidationHoldDirectory){
+    $hold=[IO.Path]::GetFullPath($ValidationHoldDirectory)
+    if(Test-Path (Join-Path $hold 'finished.json')){throw 'Validation takeover has already ended.'}
+    $ready=Get-Content (Join-Path $hold 'ready.json') -Raw|ConvertFrom-Json
+    if($ready.model -ne 'RZ09-0529' -or [IO.Path]::GetFileName($ready.vendor_recovery) -notmatch '^vendor-ownership-([0-9]+)-[0-9]+\.json$'){throw 'Unrecognized validation hold record.'}
+    $holdOwner=[int]$Matches[1]
+    $owner=@($controllers|Where-Object ProcessId -eq $holdOwner)
+    $guards=@($controllers|Where-Object ParentProcessId -eq $holdOwner)
+    if($owner.Count -ne 1 -or $guards.Count -ne 1 -or !(Test-Path ([IO.Path]::ChangeExtension($ready.vendor_recovery,'ready')))){throw 'Validation hold owner/guard are not both running.'}
+    $allowed=@($holdOwner,[int]$guards[0].ProcessId)
+    $controllers=@($controllers|Where-Object ProcessId -NotIn $allowed)
+}
+if($controllers.Count -ne 0){throw 'Exit R-Helper before the isolated fan validation.'}
 [IO.Directory]::CreateDirectory($directory)|Out-Null
 & $exe --capture-state --output (Join-Path $directory 'original-state.json') | Out-Null
 if($LASTEXITCODE -ne 0){throw 'Could not capture original hardware state.'}
@@ -48,7 +68,9 @@ try {
     $guardProcess=Start-Process -FilePath (Join-Path $PSHOME 'pwsh.exe') -ArgumentList @('-NoProfile','-File',('"'+$PSCommandPath+'"'),'-Guard','-OwnerId',$PID,'-OutputDirectory',('"'+$directory+'"')) -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path $directory 'guard.log') -RedirectStandardError (Join-Path $directory 'guard.stderr.log')
     $deadline=[DateTime]::UtcNow.AddSeconds(5)
     while(!(Test-Path (Join-Path $directory 'guard.ready'))){if($guardProcess.HasExited -or [DateTime]::UtcNow -ge $deadline){throw 'Independent guard not ready; no fan writes sent.'};Start-Sleep -Milliseconds 100}
-    $fanProcess=Start-Process -FilePath $exe -ArgumentList @('--validate-fan-zones','--output',('"'+(Join-Path $directory 'fan-zones.json')+'"')) -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path $directory 'validation.log') -RedirectStandardError (Join-Path $directory 'validation.stderr.log')
+    $arguments=if($IdentificationZone -eq 0){@('--validate-fan-zones')}else{@('--identify-main-fan',$IdentificationZone,'--fan-write-enable','--fan-alternate-mode-byte','--fan-paired-initialization','--fan-isolated-comparison','--fan-observe-seconds',$ObservationSeconds)}
+    $arguments+=@('--output',('"'+(Join-Path $directory 'fan-zones.json')+'"'))
+    $fanProcess=Start-Process -FilePath $exe -ArgumentList $arguments -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path $directory 'validation.log') -RedirectStandardError (Join-Path $directory 'validation.stderr.log')
     @{process_id=$fanProcess.Id;started_ticks=$fanProcess.StartTime.ToUniversalTime().Ticks}|ConvertTo-Json|Set-Content (Join-Path $directory 'worker.json')
     if(!$fanProcess.WaitForExit(220000)){throw 'Fan validation deadline reached.'}
     if($fanProcess.ExitCode -ne 0){throw 'Fan validation failed; inspect preserved readback logs.'}

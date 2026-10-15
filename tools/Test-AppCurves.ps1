@@ -1,16 +1,19 @@
 param(
     [Parameter(Mandatory)][string]$OutputDirectory,
-    [ValidateSet('Stop','Timeout','WorkerExit','WatchdogExit','ParentExit','AcLoss','SleepResume')][string]$Scenario='Stop',
-    [ValidateSet('debug','release')][string]$BuildConfiguration='release'
+    [ValidateSet('Stop','Timeout','WorkerExit','WatchdogExit','ParentExit','AcLoss','SleepResume','SuspendSignal')][string]$Scenario='Stop',
+    [ValidateSet('debug','release')][string]$BuildConfiguration='release',
+    [string]$ExecutableDirectory
 )
 $ErrorActionPreference='Stop'
 $root=Split-Path -Parent $PSScriptRoot
 $directory=if([IO.Path]::IsPathRooted($OutputDirectory)){[IO.Path]::GetFullPath($OutputDirectory)}else{[IO.Path]::GetFullPath((Join-Path $root $OutputDirectory))}
 if(Test-Path -LiteralPath $directory){throw 'Choose a new session directory.'}
 [IO.Directory]::CreateDirectory($directory)|Out-Null
-$exe=Join-Path $root "target\$BuildConfiguration\rhelper.exe"
-$thermalExe=Join-Path $root "target\$BuildConfiguration\rhelper-thermal.exe"
-$config=@{schema=1;downward_hold_seconds=5;session_seconds=$(if($Scenario -eq 'Timeout'){30}else{120});zones=@(
+$binaryDirectory=if($ExecutableDirectory){[IO.Path]::GetFullPath($ExecutableDirectory)}else{Join-Path $root "target\$BuildConfiguration"}
+$exe=Join-Path $binaryDirectory 'rhelper.exe'
+$thermalExe=Join-Path $binaryDirectory 'rhelper-thermal.exe'
+if(!(Test-Path -LiteralPath $exe -PathType Leaf) -or !(Test-Path -LiteralPath $thermalExe -PathType Leaf)){throw 'Curve app or thermal helper is missing.'}
+$config=@{schema=1;downward_hold_seconds=5;session_seconds=$(if($Scenario -eq 'Timeout'){30}elseif($Scenario -eq 'SleepResume'){300}else{120});zones=@(
     @{source='EcA';points=@(@{celsius=50;rpm=4000},@{celsius=80;rpm=4500})},
     @{source='EcB';points=@(@{celsius=35;rpm=4000},@{celsius=70;rpm=4500})},
     @{source='Hottest';points=@(@{celsius=50;rpm=3000},@{celsius=80;rpm=3500})}
@@ -46,6 +49,10 @@ try {
     $test.active=$status
     switch($Scenario){
         'Stop' {Set-Content (Join-Path $directory 'stop') 'stop'}
+        'SuspendSignal' {
+            & $exe --curve-test-suspend $directory
+            if($LASTEXITCODE -ne 0){throw 'Synthetic suspend did not acknowledge automatic cooling within budget.'}
+        }
         'WorkerExit' {
             $ready=Get-Content (Join-Path $directory 'ready.json') -Raw|ConvertFrom-Json
             $worker=Get-Process -Id $ready.worker_pid
@@ -57,8 +64,15 @@ try {
         'AcLoss' {@{scenario=$Scenario;instruction='Unplug AC now and leave it unplugged until restoration is verified.'}|ConvertTo-Json|Set-Content (Join-Path $directory 'awaiting-owner.json')}
         'SleepResume' {@{scenario=$Scenario;instruction='Sleep for at least 15 seconds, then wake and unlock. Owner confirmation is required to establish physical sleep.'}|ConvertTo-Json|Set-Content (Join-Path $directory 'awaiting-owner.json')}
     }
-    $deadline=[DateTime]::UtcNow.AddSeconds($(if($Scenario -in @('AcLoss','SleepResume')){120}else{45}))
+    $deadline=[DateTime]::UtcNow.AddSeconds($(if($Scenario -eq 'SleepResume'){300}elseif($Scenario -eq 'AcLoss'){120}else{45}))
+    $lastCheck=[DateTime]::UtcNow
     do {
+        $now=[DateTime]::UtcNow
+        if($Scenario -eq 'SleepResume' -and ($now-$lastCheck).TotalSeconds -ge 5){
+            $test['harness_pause_seconds']=($now-$lastCheck).TotalSeconds
+            $deadline=$now.AddSeconds(45)
+        }
+        $lastCheck=$now
         if($Scenario -eq 'WatchdogExit'){
             $status=Get-Content (Join-Path $directory 'status.json') -Raw|ConvertFrom-Json
             if($status.phase -eq 'stopped'){
@@ -74,9 +88,19 @@ try {
                 if($battery.Count -ne 1 -or $battery[0].PowerOnline){throw 'AC disconnection was not independently observed.'}
             }
             if($Scenario -eq 'SleepResume'){
-                $reason=(@($finished.status.error,$finished.reason) -join ' ')
-                if($reason -notmatch 'Resume|heartbeat'){throw 'Recovered for another reason; delayed-worker/resume fallback is not verified.'}
+                $events=@('sleep-suspend.json','sleep-display-off.json'|ForEach-Object {
+                    $eventPath=Join-Path $directory $_
+                    if(Test-Path $eventPath){Get-Content $eventPath -Raw|ConvertFrom-Json}
+                })
+                $verified=@($events|Where-Object {$_.automatic_verified -eq $true -and $_.status.captured_unix_ms -ge $_.requested_unix_ms -and $_.status.captured_unix_ms - $_.requested_unix_ms -le 1500})
+                if($verified.Count -eq 0){throw 'No timely native display-off/suspend Auto acknowledgement; post-wake fallback alone is insufficient.'}
+                $test['pre_sleep_auto_events']=$verified
                 $test['requires_owner_sleep_confirmation']=$true
+            }
+            if($Scenario -eq 'SuspendSignal'){
+                $event=Get-Content (Join-Path $directory 'sleep-test-suspend.json') -Raw|ConvertFrom-Json
+                if(!$event.automatic_verified){throw 'Synthetic suspend acknowledgement not verified.'}
+                $test['synthetic_suspend']=$event
             }
             $test.finished=$finished;break
         }

@@ -182,11 +182,18 @@ impl Drop for GuardedWorker {
 }
 
 #[cfg(windows)]
-fn supervisor(directory: &Path, parent_pid: u32) -> Result<()> {
+fn supervisor(directory: &Path, parent_pid: u32, owned: &mut bool) -> Result<()> {
     use windows::Win32::{
         Foundation::{CloseHandle, WAIT_OBJECT_0},
         System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE},
     };
+    ensure!(
+        !["ready.json", "status.json", "recovery.json", "finished.json", "stop"]
+            .iter()
+            .any(|name| directory.join(name).exists()),
+        "Curve supervisor requires a fresh session directory"
+    );
+    *owned = true;
     let parent = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, parent_pid) }?;
     struct Parent(windows::Win32::Foundation::HANDLE);
     impl Drop for Parent {
@@ -197,6 +204,9 @@ fn supervisor(directory: &Path, parent_pid: u32) -> Result<()> {
         }
     }
     let parent = Parent(parent);
+    // Register before the worker can send its first manual command. Failure is
+    // fail-closed; heartbeat recovery remains independent of these callbacks.
+    let _sleep_guard = crate::blade_sleep::Guard::register(directory)?;
     fs::write(directory.join("watchdog-heartbeat"), b"alive")?;
     let mut child = GuardedWorker {
         child: command()?.arg("--curve-worker").arg(directory).spawn()?,
@@ -255,18 +265,20 @@ fn supervisor(directory: &Path, parent_pid: u32) -> Result<()> {
         Ok(json!({"no_fan_writes":true}))
     };
     child.armed = false;
+    // Finish in-flight callback evidence before publishing the terminal record.
+    drop(_sleep_guard);
     let status = read_json(&directory.join("status.json")).ok();
     fs::write(
         directory.join("finished.json"),
         serde_json::to_vec_pretty(
-            &json!({"recovery_verified":recovery.is_ok(),"recovered":recovery.as_ref().ok(),"error":recovery.as_ref().err().map(|e|format!("{e:#}")),"worker_error":fs::read_to_string(directory.join("worker-error.txt")).ok(),"worker_exit_success":exit.success(),"killed":killed,"reason":reason,"status":status}),
+            &json!({"recovery_verified":recovery.is_ok(),"recovered":recovery.as_ref().ok(),"error":recovery.as_ref().err().map(|e|format!("{e:#}")),"worker_error":fs::read_to_string(directory.join("worker-error.txt")).ok(),"worker_exit_success":exit.success(),"killed":killed,"reason":reason,"status":status,"sleep_events":{"suspend":read_json(&directory.join("sleep-suspend.json")).ok(),"display_off":read_json(&directory.join("sleep-display-off.json")).ok(),"test_suspend":read_json(&directory.join("sleep-test-suspend.json")).ok()}}),
         )?,
     )?;
     recovery?;
     Ok(())
 }
 #[cfg(not(windows))]
-fn supervisor(_: &Path, _: u32) -> Result<()> {
+fn supervisor(_: &Path, _: u32, _: &mut bool) -> Result<()> {
     anyhow::bail!("Windows required")
 }
 
@@ -276,13 +288,20 @@ pub fn dispatch_cli() -> bool {
     let Some(role) = args.next() else {
         return false;
     };
-    if role != "--curve-worker" && role != "--curve-supervisor" && role != "--curve-recover" {
+    if role != "--curve-worker"
+        && role != "--curve-supervisor"
+        && role != "--curve-recover"
+        && role != "--curve-test-suspend"
+    {
         return false;
     }
     let Some(directory) = args.next().map(PathBuf::from) else {
         std::process::exit(1);
     };
-    let result = if role == "--curve-recover" {
+    let mut supervisor_owned = false;
+    let result = if role == "--curve-test-suspend" {
+        crate::blade_sleep::simulate_suspend(&directory)
+    } else if role == "--curve-recover" {
         librazer::blade18::restore_curve_session(&directory).and_then(|value| {
             fs::write(directory.join("recovered.json"), serde_json::to_vec(&value)?)?;
             Ok(())
@@ -293,12 +312,12 @@ pub fn dispatch_cli() -> bool {
         args.next()
             .and_then(|v| v.to_str().and_then(|v| v.parse::<u32>().ok()))
             .context("Missing parent PID")
-            .and_then(|pid| supervisor(&directory, pid))
+            .and_then(|pid| supervisor(&directory, pid, &mut supervisor_owned))
     };
     if let Err(error) = result {
         if role == "--curve-worker" {
             let _ = fs::write(directory.join("worker-error.txt"), format!("{error:#}"));
-        } else if role == "--curve-supervisor" {
+        } else if role == "--curve-supervisor" && supervisor_owned {
             let recovered = if directory.join("recovery.json").exists() {
                 librazer::blade18::restore_curve_session(&directory).map(|sample| json!(sample))
             } else {
@@ -308,8 +327,10 @@ pub fn dispatch_cli() -> bool {
                 directory.join("finished.json"),
                 json!({"recovery_verified":recovered.is_ok(),"recovered":recovered.as_ref().ok(),"worker_error":format!("Watchdog startup/runtime error: {error:#}"),"error":recovered.as_ref().err().map(|e|format!("{e:#}"))}).to_string(),
             );
-        } else {
+        } else if role == "--curve-recover" {
             let _ = fs::write(directory.join("recovery-error.txt"), format!("{error:#}"));
+        } else if role == "--curve-test-suspend" {
+            let _ = fs::write(directory.join("sleep-test-error.txt"), format!("{error:#}"));
         }
         std::process::exit(1);
     }
@@ -319,6 +340,25 @@ pub fn dispatch_cli() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    fn rejected_reused_directory_does_not_take_ownership_or_touch_recovery() {
+        let directory = std::env::temp_dir().join(format!(
+            "rhelper-reused-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        fs::create_dir(&directory).unwrap();
+        fs::write(directory.join("recovery.json"), b"original recovery sentinel").unwrap();
+        let mut owned = false;
+        assert!(supervisor(&directory, 0, &mut owned).is_err());
+        assert!(!owned);
+        assert_eq!(
+            fs::read(directory.join("recovery.json")).unwrap(),
+            b"original recovery sentinel"
+        );
+        assert!(!directory.join("finished.json").exists());
+    }
     #[test]
     fn profile_handoff_requires_confirmed_curve_recovery() {
         let active = shared();

@@ -5,6 +5,53 @@ const ACCENT: Color32 = Color32::from_rgb(105, 220, 145);
 const MUTED: Color32 = Color32::from_rgb(155, 166, 176);
 const SURFACE: Color32 = Color32::from_rgb(29, 33, 39);
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub(super) enum Section {
+    #[default]
+    Overview,
+    Fans,
+    Lighting,
+    Profiles,
+    Display,
+    Updates,
+    System,
+}
+
+impl Section {
+    const ALL: [Self; 7] = [
+        Self::Overview,
+        Self::Fans,
+        Self::Lighting,
+        Self::Profiles,
+        Self::Display,
+        Self::Updates,
+        Self::System,
+    ];
+    fn label(self) -> &'static str {
+        match self {
+            Self::Overview => "Overview",
+            Self::Fans => "Fans",
+            Self::Lighting => "Lighting",
+            Self::Profiles => "Profiles",
+            Self::Display => "Display",
+            Self::Updates => "Updates",
+            Self::System => "GPU + diagnostics",
+        }
+    }
+}
+
+pub(super) fn section_card(
+    ui: &mut egui::Ui,
+    selected: Section,
+    section: Section,
+    title: &str,
+    body: impl FnOnce(&mut egui::Ui),
+) {
+    if selected == section {
+        card(ui, title, body);
+    }
+}
+
 pub(super) fn configure(ctx: &egui::Context) {
     ctx.set_theme(egui::ThemePreference::Dark);
     let mut visuals = egui::Visuals::dark();
@@ -60,6 +107,10 @@ impl BladeApp {
     /// Fixture-only window: no settings, hardware reads, tray, hotkeys or power watcher.
     pub(super) fn preview(cc: &eframe::CreationContext<'_>) -> Self {
         configure(&cc.egui_ctx);
+        Self::fixture()
+    }
+
+    pub(super) fn fixture() -> Self {
         let state = State {
             brightness: 176,
             logo: LogoMode::Static,
@@ -74,6 +125,8 @@ impl BladeApp {
         let settings = Settings { ac: Some(Profile::capture(&state)), ..Settings::default() };
         let (_, power_updates) = mpsc::channel();
         Self {
+            section: Section::Overview,
+            activity: super::activity::Activity::default(),
             benchmark_exit: None,
             vendor: crate::blade_vendor::Ui::default(),
             extended: None,
@@ -150,14 +203,22 @@ impl BladeApp {
                     hint(ui, "BLADE 18  ·  2025  ·  RTX 5090");
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.add_enabled(enabled, egui::Button::new("Refresh")).clicked() { self.start(ctx, "Read device state", None, blade18::status); }
+                    if ui.add_enabled(enabled, egui::Button::new("Refresh")).clicked() { self.start(ctx, "Read device state", None, None, blade18::status); }
                     ui.label(RichText::new(match self.last_power { Some(true) => "AC POWER", Some(false) => "BATTERY", None => "UNKNOWN POWER" }).small().color(ACCENT));
                 });
             });
             ui.add_space(10.0);
             if self.preview { ui.colored_label(ACCENT, "PREVIEW · sample data · controls disabled"); }
-            egui::ScrollArea::vertical().max_height((ui.available_height() - footer_height).max(180.0)).auto_shrink([false, false]).show(ui, |ui| {
-                card(ui,"Laptop control ownership",|ui| {
+            ui.horizontal_wrapped(|ui| {
+                for tab in Section::ALL {
+                    ui.selectable_value(&mut self.section, tab, tab.label());
+                }
+            });
+            let section = self.section;
+            hint(ui, self.activity.summary());
+            hint(ui, &self.activity.reason);
+            egui::ScrollArea::vertical().id_salt(self.section).max_height((ui.available_height() - footer_height).max(180.0)).auto_shrink([false, false]).show(ui, |ui| {
+                section_card(ui, section, Section::Overview, "Laptop control ownership",|ui| {
                     let summary=if self.vendor.message.is_empty(){"Razer software takeover is off"}else{self.vendor.message.as_str()};
                     ui.add(egui::Label::new(summary).truncate()).on_hover_text(summary);
                     ui.collapsing("Manage Razer software",|ui| {
@@ -165,7 +226,7 @@ impl BladeApp {
                     });
                 });
                 if let Some(state) = &mut self.state {
-                    card(ui, "Performance", |ui| {
+                    section_card(ui, section, Section::Overview, "Performance", |ui| {
                         ui.add_enabled_ui(enabled, |ui| {
                             ui.horizontal(|ui| {
                                 let width = (ui.available_width() - 24.0) / 4.0;
@@ -185,22 +246,22 @@ impl BladeApp {
                         });
                         hint(ui, "Firmware modes · Performance and Custom require AC power");
                     });
-                    card(ui, "Fans + temperatures", |ui| {
+                    section_card(ui, section, Section::Fans, "Fans + temperatures", |ui| {
                         ui.columns(3, |columns| {
-                            metric(&mut columns[0], "FAN 1", &format!("{} RPM", state.fan_actual[0]));
-                            metric(&mut columns[1], "FAN 2", &format!("{} RPM", state.fan_actual[1]));
+                            metric(&mut columns[0], "FAN 1 · LEFT", &format!("{} RPM", state.fan_actual[0]));
+                            metric(&mut columns[1], "FAN 2 · RIGHT", &format!("{} RPM", state.fan_actual[1]));
                             let third = self.sensor_report.as_ref().and_then(|r| {
                                 let reading = &r["sensor_candidates"]["getters"]["fan_zone_3_actual_rpm"];
                                 (reading["ok"] == true).then(|| reading["response_args"][2].as_u64()).flatten()
                             }).map(|rpm| format!("{} RPM", rpm * 100)).unwrap_or_else(|| "—".into());
-                            metric(&mut columns[2], "FAN 3", &third);
+                            metric(&mut columns[2], "FAN 3 · CENTER", &third);
                         });
                         ui.horizontal_wrapped(|ui| {
                             ui.label(format!("EC A: {}", temperature(self.sensor_report.as_ref(), 1)));
                             ui.label(format!("EC B: {}", temperature(self.sensor_report.as_ref(), 2)));
                             if ui.add_enabled(enabled, egui::Button::new("Read sensors")).clicked() { read_sensors = true; }
                         });
-                        hint(ui, if self.curve_events.is_some(){"Live controller readings while curves run · physical roles unresolved"}else{"Snapshots only · EC sensor proxies · physical fan roles unresolved"});
+                        hint(ui, if self.curve_events.is_some(){"Live controller readings while curves run · airflow locations mapped on this RB18"}else{"Snapshots only · EC temperature proxies · left / right / center airflow observed"});
                         ui.horizontal_wrapped(|ui| {
                             ui.label(format!("Cooling: {:?}", state.fan_mode));
                             if ui.add_enabled(enabled, egui::Button::new("Automatic").selected(state.fan_mode == FanMode::Auto)).clicked() { requested = Some(Change::AutoFans); }
@@ -214,9 +275,9 @@ impl BladeApp {
                             });
                             hint(ui, "AC power and Balanced mode required. Speeds ramp slowly; refresh to check.");
                         });
-                        hint(ui,"Independent curve editor below · numbered fans, explicit EC sources");
+                        hint(ui,"Independent curve editor in this panel · numbered fans, explicit EC sources");
                     });
-                    card(ui, "Lighting", |ui| {
+                    section_card(ui, section, Section::Lighting, "Lighting", |ui| {
                         ui.add_enabled_ui(enabled, |ui| {
                             ui.horizontal(|ui| {
                                 ui.label("Keyboard");
@@ -233,7 +294,7 @@ impl BladeApp {
                         });
                         if ui.add_enabled(enabled, egui::Button::new("Read lighting controls")).clicked() { read_lighting=true; }
                         if let Some(lighting)=&self.lighting {
-                            hint(ui,"Keyboard effects and per-key colors are below.");
+                            hint(ui,"Keyboard effects and per-key colors are in this panel.");
 let mut underside=lighting.underside;
                             let mut startup=lighting.startup_animation;
                             if ui.add_enabled(enabled,egui::Checkbox::new(&mut underside,"Underside light")).changed() {
@@ -256,7 +317,7 @@ let mut underside=lighting.underside;
                         }
                         hint(ui, "Logo: single-color light · underside: separate on/off control");
                     });
-                    card(ui, "Battery care", |ui| {
+                    section_card(ui, section, Section::Overview, "Battery care", |ui| {
                         ui.add_enabled_ui(enabled, |ui| {
                             ui.horizontal(|ui| {
                                 ui.label("Charge limit");
@@ -268,16 +329,16 @@ let mut underside=lighting.underside;
                         hint(ui, "Battery care requests an 80% target; charging cutoff validation is pending");
                     });
                 } else {
-                    card(ui, "Device unavailable", |ui| {
+                    section_card(ui, section, Section::Overview, "Device unavailable", |ui| {
                         ui.label("Refresh to read the Blade 18 controls.");
                         hint(ui, "No replacement values are used when a query fails.");
                     });
                 }
-                self.curve_editor(ui,ctx,idle);
+                if section == Section::Fans { self.curve_editor(ui,ctx,idle); }
                 self.batch_controls(ui,ctx,enabled);
                 self.extended_controls(ui,ctx,enabled);
                 // Profile actions require mutable app access after the state borrow ends.
-                card(ui, "Power profiles", |ui| {
+                section_card(ui, section, Section::Profiles, "Power profiles", |ui| {
                     for ac in [true, false] {
                         let saved = if ac { &self.settings.ac } else { &self.settings.battery };
                         let has_saved = saved.is_some();
@@ -286,15 +347,15 @@ let mut underside=lighting.underside;
                             ui.label(if ac { "Plugged in" } else { "On battery" });
                             ui.label(RichText::new(mode).color(ACCENT));
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.add_enabled(enabled && self.settings_error.is_none(), egui::Button::new("Save current")).clicked() { self.start(ctx, if ac { "Save AC profile" } else { "Save battery profile" }, Some(ac), blade18::status); }
+                                if ui.add_enabled(enabled && self.settings_error.is_none(), egui::Button::new("Save current")).clicked() { self.start(ctx, if ac { "Save AC profile" } else { "Save battery profile" }, Some(ac), None, blade18::status); }
                                 if ui.add_enabled(enabled && has_saved, egui::Button::new("Apply")).clicked() { self.apply_saved(ctx, ac); }
                             });
                         });
                     }
+                    hint(ui, "Power profiles control performance, fans, charge limit, keyboard brightness and logo. Optional display and lighting choices apply too.");
                     if ui.add_enabled(enabled && self.settings_error.is_none() && self.settings.ac.is_some() && self.settings.battery.is_some(), egui::Checkbox::new(&mut self.settings.automatic, "Switch profiles when power source changes")).changed() { self.persist(); }
                 });
-                card(ui, "More", |ui| {
-                    ui.collapsing("Controller capabilities",|ui|{
+                    section_card(ui, section, Section::System, "Controller capabilities",|ui|{
                         if ui.add_enabled(enabled,egui::Button::new("Read capabilities")).clicked(){read_capabilities=true;}
                         if let Some(report)=&self.capability_report {
                             for (key,label) in [("vga_configuration","Graphics mode"),("panel_resolution_mode","Panel mode"),("startup_animation_control","Startup animation"),("fan_cooling_mode_class_0","Alternate cooling mode")] {
@@ -304,7 +365,7 @@ let mut underside=lighting.underside;
                         }
                         hint(ui,"Read-only discovery · no graphics, panel or animation changes");
                     });
-                    ui.collapsing("Display + NVIDIA tuning", |ui| {
+                    section_card(ui, section, Section::Display, "Refresh rate + color", |ui| {
                         if ui.add_enabled(enabled,egui::Button::new("Read refresh rates")).clicked(){read_display=true;}
                         if let Some(info)=self.display.clone() {
                             ui.label(format!("Internal panel · {} × {} · {} Hz",info.current.width,info.current.height,info.current.hz));
@@ -325,26 +386,12 @@ let mut underside=lighting.underside;
                             }
                             hint(ui,"Refresh profiles use automatic power switching. Resolution stays unchanged.");
                         }
-                        hint(ui,"NVIDIA clock and voltage tuning is planned.");
                     });
-                    ui.collapsing("BIOS + drivers", |ui| {
-                        if let Some(report) = &self.sensor_report {
-                            if let Some(version) = report["bios"]["BIOSVersion"].as_str() { ui.label(format!("BIOS snapshot: {version}")); }
-                            let firmware = &report["sensor_candidates"]["getters"]["controller_firmware"];
-                            if firmware["ok"] == true {
-                                let bytes = &firmware["response_args"];
-                                if let (Some(major), Some(minor)) = (bytes[0].as_u64(), bytes[1].as_u64()) { ui.label(format!("Controller snapshot: {major}.{minor}")); }
-                            }
-                        }
-                        ui.hyperlink_to("Official Blade 18 downloads", "https://mysupport.razer.com/app/answers/detail/a_id/19866");
-                        hint(ui, "Vendor downloads · installed-version comparison is planned");
-                    });
-                    ui.collapsing("Diagnostics + shortcuts", |ui| {
+                    section_card(ui, section, Section::System, "Diagnostics + shortcuts", |ui| {
                         if ui.button("Copy report").clicked() { ctx.copy_text(self.report.clone()); }
                         hint(ui, "Ctrl+Shift+Alt: F12 show · F5 mode · F6 AC · F7 battery");
                         ui.add(egui::TextEdit::multiline(&mut self.report).font(egui::TextStyle::Monospace).desired_width(f32::INFINITY).interactive(false).desired_rows(10));
                     });
-                });
             });
             ui.separator();
             ui.horizontal(|ui| {
@@ -359,12 +406,18 @@ let mut underside=lighting.underside;
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.add_enabled(idle, egui::Button::new("Exit")).clicked() { self.action(ctx, Action::Quit); }
                     if self.desktop.is_some() && ui.button("Hide").clicked() { ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false)); }
-                    if self.curve_events.is_some() && ui.add_enabled(idle,egui::Button::new("Stop curves")).clicked(){self.start(ctx,"Stop curves",None,blade18::status);}
+                    if self.curve_events.is_some() && ui.add_enabled(idle,egui::Button::new("Stop curves")).clicked(){self.start(ctx,"Stop curves",None,None,blade18::status);}
                 });
             });
         });
         if let Some(change) = requested {
-            self.start(ctx, "Apply setting", None, move || blade18::change(change));
+            self.start(
+                ctx,
+                "Apply setting",
+                None,
+                Some(activity::Activity::setting(&change)),
+                move || blade18::change(change),
+            );
         }
         if save_display_profiles {
             self.persist();
@@ -418,6 +471,64 @@ let mut underside=lighting.underside;
                 );
                 repaint.request_repaint();
             });
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn all_panels_render_without_hardware_or_background_workers() {
+        let ctx = egui::Context::default();
+        configure(&ctx);
+        let mut app = BladeApp::fixture();
+        for section in Section::ALL {
+            app.section = section;
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(540.0, 800.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| app.render(ctx, true),
+            );
+            assert!(!output.shapes.is_empty(), "{section:?}");
+            assert!(app.job.is_none() && app.sensor_job.is_none() && app.power_watcher.is_none());
+        }
+    }
+
+    #[test]
+    fn hidden_panel_does_not_execute_control_body() {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                section_card(ui, Section::Overview, Section::Lighting, "Hidden", |_| {
+                    panic!("hidden controls executed")
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn profile_history_changes_only_after_successful_apply_not_reads_or_failures() {
+        let mut app = BladeApp::fixture();
+        let state = app.state.clone().unwrap();
+        let activity = activity::Activity::new("Game", "Applied manually", "lighting");
+        for (result, applied, expected) in [
+            (Ok(state.clone()), Some(activity.clone()), "Game"),
+            (Ok(state), None, "Game"),
+            (Err("failed".into()), Some(activity::Activity::new("Failed", "", "")), "Game"),
+        ] {
+            let (sender, receiver) = mpsc::channel();
+            app.job =
+                Some(Job { receiver, save_as: None, label: "Operation".into(), activity: applied });
+            sender.send(result).unwrap();
+            app.complete();
+            assert_eq!(app.activity.name, expected);
         }
     }
 }
