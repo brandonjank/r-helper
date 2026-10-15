@@ -191,6 +191,7 @@ pub fn preview_auxiliary(
             );
         }
     }
+    let native_on_acquire = native_lighting_snapshot();
     let file = std::fs::File::options().create_new(true).write(true).open(path)?;
     serde_json::to_writer_pretty(
         &file,
@@ -207,6 +208,9 @@ pub fn preview_auxiliary(
     lamp.SetBrightnessLevel(1.0)?;
     lamp.SetColorsForIndices(&colors, &indices)?;
     lamp.SetIsEnabled(true)?;
+    // Compare native switches after Windows flushes its buffered colors.
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let native_after_flush = native_lighting_snapshot();
     let generation = GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
     *owner = Some((generation, lamp));
     drop(owner);
@@ -221,8 +225,20 @@ pub fn preview_auxiliary(
         }
     });
     Ok(
-        serde_json::json!({"indices":indices,"requested":rgb,"highlight_lamp":highlight,"preview_seconds":15,"color_readback_available":false,"foreground_only":true}),
+        serde_json::json!({"indices":indices,"requested":rgb,"highlight_lamp":highlight,"native_on_acquire":native_on_acquire,"native_after_flush":native_after_flush,"preview_seconds":15,"color_readback_available":false,"foreground_only":true}),
     )
+}
+#[cfg(windows)]
+fn native_lighting_snapshot() -> serde_json::Value {
+    let mut snapshot = match super::lighting::status() {
+        Ok(value) => serde_json::json!({"ok":true,"state":value}),
+        Err(error) => serde_json::json!({"ok":false,"error":format!("{error:#}")}),
+    };
+    snapshot["firmware_chroma_flag"] = match super::extended::Control::ForceChroma.read() {
+        Ok(value) => serde_json::json!({"ok":true,"value":value}),
+        Err(error) => serde_json::json!({"ok":false,"error":format!("{error:#}")}),
+    };
+    snapshot
 }
 #[cfg(not(windows))]
 pub fn preview_auxiliary(

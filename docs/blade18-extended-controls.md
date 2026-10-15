@@ -114,7 +114,16 @@ The automatic integrated red batch subsequently completed: underside power-on at
 200/255 passed readback, the foreground helper accepted red (`#FF2020`) with the
 keyboard seeded blue, the owner process exited, firmware restoration passed, and
 Razer services returned to their original running states. The backup lighting
-helper disarmed without fallback. Physical red-vs-blue confirmation is pending.
+helper disarmed without fallback. The owner observed a green logo, blue keyboard,
+and no visible underside light during this integrated red test. **Physical
+auxiliary RGB validation failed**, despite successful power-on readback before
+foreground ownership began. A standalone native underside power test worked;
+the difference is associated with the foreground LampArray path, but the exact
+cause is unresolved. Do not claim underside RGB support or infer a lamp mapping.
+The next diagnostic candidate records native lighting switches/brightness/effect
+metadata and the firmware Chroma flag immediately after LampArray acquisition
+and after its buffered color update. These are read-only handoff checks; they
+distinguish a native switch change from an unchanged switch with no visible light.
 
 An explicit `--auxiliary-test <request.json> <new-output.json>` entry point runs
 the same bounded test with temporary, reversible Razer service ownership. It

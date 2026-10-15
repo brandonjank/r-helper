@@ -212,6 +212,7 @@ pub fn dispatch() -> Option<Result<()>> {
                     started: Instant::now(),
                     receiver: None,
                     accepted: false,
+                    details: None,
                     message: "Preparing lighting test…".into(),
                 }))
             }),
@@ -226,6 +227,7 @@ struct Preview {
     started: Instant,
     receiver: Option<std::sync::mpsc::Receiver<Result<serde_json::Value, String>>>,
     accepted: bool,
+    details: Option<serde_json::Value>,
     message: String,
 }
 impl eframe::App for Preview {
@@ -256,7 +258,10 @@ impl eframe::App for Preview {
                 self.started = Instant::now();
                 self.accepted = result.is_ok();
                 self.message = match result {
-                    Ok(_) => "Watch the underside lights. The logo remains green-only.".into(),
+                    Ok(details) => {
+                        self.details = Some(details);
+                        "Watch the underside lights. The logo remains green-only.".into()
+                    }
                     Err(e) => e,
                 };
             }
@@ -281,7 +286,7 @@ impl eframe::App for Preview {
         blade18::lamp_array::release();
         let _ = save(
             &self.path,
-            &serde_json::json!({"accepted":self.accepted,"message":self.message,"owner_process_exiting":true}),
+            &serde_json::json!({"accepted":self.accepted,"message":self.message,"api_details":self.details,"owner_process_exiting":true}),
         );
         // Parent reads the report only after this process exits.
     }
