@@ -181,6 +181,77 @@ fn run_kind(
     )
 }
 
+fn visual_preset(original: &Preset, style: Style) -> Preset {
+    let mut preset = original.clone();
+    preset.style = style;
+    preset.speed = (style == Style::Starlight).then_some(2);
+    preset.color = [32, 64, 255];
+    preset.second = [255, 64, 32];
+    preset.keys = vec![preset.color; 114];
+    preset.brightness = original.brightness.max(128);
+    preset.underside_color = None;
+    preset.underside_keys = None;
+    preset
+}
+fn keyboard_visual(output: &Path) -> Result<()> {
+    let original = Preset::capture(&blade18::lighting::status()?, blade18::status()?.logo)?;
+    let mut ownership = crate::blade_vendor::Session::start()?;
+    let tested = (|| -> Result<serde_json::Value> {
+        // Arm the existing independent ownership guard with the real original
+        // lighting before any firmware effect or keyboard-control test writes.
+        let mut armed = original.clone();
+        armed.style = Style::Static;
+        armed.speed = None;
+        armed.underside_color = Some(original.color);
+        armed.underside_keys = None;
+        armed.apply(&output.with_extension("armed.json"))?;
+        original.apply(&output.with_extension("baseline.json"))?;
+
+        let controls = output.with_extension("controls.json");
+        let executable = std::env::current_exe()?.with_file_name("rhelper-controls.exe");
+        ensure!(executable.is_file(), "Keyboard test tool missing");
+        let mut command = std::process::Command::new(executable);
+        command.arg("--validate").arg("--output").arg(&controls);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000);
+        }
+        let mut child = command.spawn()?;
+        let start = Instant::now();
+        let status = loop {
+            if let Some(status) = child.try_wait()? { break status; }
+            if start.elapsed() >= Duration::from_secs(40) {
+                let _ = child.kill();
+                let _ = child.wait();
+                anyhow::bail!("Keyboard controls timed out; independent control guard will restore");
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        };
+        let control_report: serde_json::Value = serde_json::from_slice(&std::fs::read(&controls)?)?;
+        ensure!(status.success() && control_report["passed"] == true, "Keyboard controls failed: {control_report}");
+
+        let mut phases = vec![];
+        for (index, style) in [Style::Starlight, Style::Ripple].into_iter().enumerate() {
+            ownership.health()?;
+            let preset = visual_preset(&original, style);
+            preset.apply(&output.with_extension(format!("phase-{index}.json")))?;
+            ensure!(Preset::capture(&blade18::lighting::status()?, blade18::status()?.logo)? == preset, "Effect capture mismatch");
+            phases.push(serde_json::json!({"effect":style,"metadata_verified":true,"visual_verified":false}));
+            std::thread::sleep(Duration::from_secs(20));
+        }
+        Ok(serde_json::json!({"controls":control_report,"phases":phases}))
+    })();
+    let released = ownership.stop();
+    let restored = Preset::capture(&blade18::lighting::status()?, blade18::status()?.logo)? == original
+        && blade18::lighting::native_mode()? == blade18::lighting::NativeMode::Firmware;
+    save(output, &serde_json::json!({"tested":tested.as_ref().ok(),"test_error":tested.as_ref().err().map(|e|format!("{e:#}")),"vendor_restored":released.is_ok(),"restore_error":released.as_ref().err().map(|e|format!("{e:#}")),"original_lighting_restored":restored,"physical_confirmation_required":true}))?;
+    released?;
+    tested?;
+    ensure!(restored, "Original keyboard lighting did not restore");
+    Ok(())
+}
+
 fn native_maintenance(
     path: &Path,
     output: &Path,
@@ -326,6 +397,7 @@ pub fn dispatch() -> Option<Result<()>> {
             | "--native-channel-test"
             | "--native-profile-test"
             | "--native-cell-markers-test"
+            | "--keyboard-visual-test"
             | "--native-maintenance-batch"
             | "--native-owner-exit"
             | "--native-lighting-inspect"
@@ -338,6 +410,9 @@ pub fn dispatch() -> Option<Result<()>> {
         let path = PathBuf::from(&args[2]);
         let output = PathBuf::from(&args[3]);
         let request = load(&path)?;
+        if mode == "--keyboard-visual-test" {
+            return keyboard_visual(&output);
+        }
         if mode == "--native-maintenance-batch" || mode == "--native-owner-exit" {
             let result = native_maintenance(&path, &output, mode == "--native-owner-exit", false);
             if let Err(error) = &result {
@@ -586,6 +661,29 @@ impl eframe::App for Preview {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn visual_presets_match_firmware_capture_with_canonical_timing_and_colors() {
+        let mut original = request().preset;
+        original.color = [0, 0, 255];
+        original.keys = vec![original.color; 114];
+        original.second = [11, 22, 33];
+        for (style, effect) in [
+            (Style::Starlight, vec![1, 5, 7, 0, 2, 2, 32, 64, 255, 255, 64, 32]),
+            (Style::Ripple, vec![1, 5, 6, 0, 2, 1, 32, 64, 255]),
+        ] {
+            let expected = visual_preset(&original, style);
+            let status = blade18::lighting::Lighting {
+                startup_animation: true,
+                underside: original.underside,
+                underside_brightness: original.underside_brightness,
+                keyboard_effect: effect,
+                logo_effect: vec![1, 4, 1, 0, 0, 0],
+                keyboard_brightness: expected.brightness,
+                logo_brightness: 255,
+            };
+            assert_eq!(Preset::capture(&status, original.logo).unwrap(), expected);
+        }
+    }
     fn request() -> Request {
         Request {
             preset: Preset {

@@ -299,8 +299,8 @@ impl Style {
             Self::WaveLeft => "Wave left",
             Self::WaveRight => "Wave right",
             Self::Reactive => "Reactive",
-            Self::Starlight => "Starlight · visual test pending",
-            Self::Ripple => "Ripple · visual test pending",
+            Self::Starlight => "Starlight",
+            Self::Ripple => "Ripple",
             Self::PerKey => "Per-key colors",
         }
     }

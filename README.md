@@ -5,7 +5,8 @@ based on [Fatalution/r-helper](https://github.com/Fatalution/r-helper).
 
 ## Blade 18 (2025)
 
-The 0.6.0 test candidate adds verified Fn-primary/gaming controls, Starlight/Ripple,
+The 0.6.0 test candidate adds controller-tested Fn-primary/gaming controls and
+visually confirmed Starlight/Ripple,
 effect timing choices, a Windows lighting map and a timed preview for 18 newly
 discovered auxiliary RGB lamps. It also adds reversible Razer-software takeover;
 privileged takeover, sleep/wake, and exit restoration have passed. Native frames
@@ -14,7 +15,7 @@ with separate colors saved in profiles and automatic restoration on release.
 The Windows auxiliary preview remains experimental.
 See [extended controls and the return-to-desk test batch](docs/blade18-extended-controls.md).
 
-The next batch adds static underside cell maps, on-demand firmware/panel/driver and
+This batch also adds static underside cell maps, on-demand firmware/panel/driver and
 thermal-zone diagnostics, guarded Windows resolution previews and an experimental
 administrator-only NVIDIA clock preview. See [tested results and remaining
 requirements](docs/blade18-autonomous-batch.md).

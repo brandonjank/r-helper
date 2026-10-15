@@ -13,8 +13,8 @@ headsets, wireless chargers and analog keyboards are excluded.
 | Gaming mode switch | `0088` / `0008`, only `[0 or 1,0,0,0]`. | On/off round trip passed. This is not the custom Windows/Alt+Tab/Alt+F4 mask API; that separate getter is unsupported. Key blocking and indicator appearance need owner checks. |
 | Firmware Chroma flag | `0f90` / `0f10`, Boolean. | Both values round-trip. Experimental: this is not an OS ownership lock and is not enabled automatically as a conflict fix. |
 | Native keyboard Off | `0f02 [1,5,0,0,0,0]`. | Command/readback/restoration passed. |
-| Native two-color Starlight | `0f02`, effect 7, fixed region 5/profile 1, two RGB colors, duration 1–3. | Default and alternate durations passed exact readback/restoration. Appearance needs owner confirmation. |
-| Native Ripple | `0f02`, effect 6, one RGB color, fixed duration 2. | Exact command/readback/restoration passed. Physical key-trigger behavior needs owner confirmation. |
+| Native two-color Starlight | `0f02`, effect 7, fixed region 5/profile 1, two RGB colors, duration 1–3. | Default and alternate durations passed exact readback/restoration. Owner confirmed blue/orange Starlight in the final visual batch. |
+| Native Ripple | `0f02`, effect 6, one RGB color, fixed duration 2. | Exact command/readback/restoration passed. Owner confirmed key-triggered blue Ripple in the final visual batch. |
 | Reactive duration choices | Existing effect 5, duration 1–4. | All four values passed exact readback/restoration. |
 | Adapter information | Existing `078c` response decoded to adapter and recommended classes. | Both report 400 W on this unit. This is an advertised class, not measured power delivery. Read only and on demand. |
 

@@ -86,6 +86,29 @@ dark in testing in the editor. For repeats, optional request `highlight` selects
 the blue slot (2–18, excluding 10); omission selects 19. This review does not resolve the research-only
 controls or remaining physical checks listed below.
 
+The owner subsequently asked to assume the intermediate LED positions are correct.
+The editor now labels those positions as assumed; it retains the distinction
+from observed cells 1/10/18 and the dark slot 19. Further individual-cell mapping
+is not a release blocker under that accepted assumption.
+
+## Final keyboard checks
+
+`--keyboard-visual-test REQUEST OUTPUT` arms original-lighting recovery through
+the independent ownership guard, runs all four keyboard control round trips,
+then shows Starlight and Ripple for 20 seconds each before restoring lighting
+and vendor software. The first attempt restored early because the test compared
+implicit timing/unrendered color fields against canonical captured values. The
+test now uses canonical presets, with a regression fixture for both effects.
+
+The corrected run (`keyboard-visual-20261014-200403`) passed all four control
+apply/readback/restore checks and both effect captures. Original lighting and
+Firmware mode restored; both Razer services returned to Running/Automatic and
+no R-Helper process remained. The owner confirmed both effects worked visually,
+including key-triggered Ripple. Their visual-pending labels are removed.
+Physical Fn/gaming key behavior, indicators, and reboot retention remain distinct
+from controller roundtrip evidence and are still labelled as needing owner checks.
+The final workspace suite passes 82 tests and the optimized Windows build passes.
+
 ## Remaining controls and the reason they are not enabled
 
 | Area | What is established | Next requirement |
