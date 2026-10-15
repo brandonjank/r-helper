@@ -226,7 +226,7 @@ impl BladeApp {
                     for row in report["rows"].as_array().into_iter().flatten() {
                         ui.separator();
                         ui.label(format!(
-                            "{} · installed {} → catalog {}",
+                            "{} · installed {} · catalog {}",
                             row["component"].as_str().unwrap_or("Firmware"),
                             row["installed"].as_str().unwrap_or("unknown"),
                             row["available"].as_str().unwrap_or("unknown")

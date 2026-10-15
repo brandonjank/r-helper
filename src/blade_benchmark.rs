@@ -62,14 +62,17 @@ pub fn start(config: Config, ctx: eframe::egui::Context, hwnd: isize) -> Arc<Ato
         let measured = (|| -> Result<Value> {
             std::thread::sleep(Duration::from_secs(15));
             let before = counters()?;
+            let hid_before = librazer::device::transport_counters();
             let started = Instant::now();
             std::thread::sleep(Duration::from_secs(config.seconds));
             let after = counters()?;
+            let hid_after = librazer::device::transport_counters();
             let elapsed = started.elapsed().as_secs_f64();
             let cpu = (after.0 - before.0) as f64 / 10_000_000.0;
-            Ok(
-                json!({"mode":if config.hidden{"hidden"}else{"visible"},"warmup_seconds":15,"elapsed_seconds":elapsed,"cpu_seconds":cpu,"percent_of_one_core":cpu/elapsed*100.0,"io_operations":after.1-before.1,"io_bytes":after.2-before.2,"vendor_takeover_enabled":false,"note":"Finite diagnostic of normal GUI/watchers with vendor takeover skipped. No GPU telemetry, update network checks or battery-energy claim. Compare separately with elevated takeover during the guided batch."}),
-            )
+            let mut report = json!({"mode":if config.hidden{"hidden"}else{"visible"},"warmup_seconds":15,"elapsed_seconds":elapsed,"cpu_seconds":cpu,"percent_of_one_core":cpu/elapsed*100.0,"io_operations":after.1-before.1,"io_bytes":after.2-before.2,"vendor_takeover_enabled":false,"note":"Finite diagnostic of normal GUI/watchers with vendor takeover skipped. No GPU telemetry, update network checks or battery-energy claim. Compare separately with elevated takeover during the guided batch."});
+            report["hid_report_writes"] = json!(hid_after.0 - hid_before.0);
+            report["hid_report_reads"] = json!(hid_after.1 - hid_before.1);
+            Ok(report)
         })();
         let report = measured.unwrap_or_else(|e| json!({"error":format!("{e:#}")}));
         let saved = serde_json::to_writer_pretty(&config.file, &report)

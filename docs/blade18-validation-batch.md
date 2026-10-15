@@ -116,6 +116,45 @@ Sources: [Razer model catalog](https://mysupport.razer.com/app/answers/detail/a_
 
 ## One guided session still required
 
+### Current UI build follow-up (2026-10-14)
+
+PR #5 CI passed both Windows jobs. The live interface was inspected at its default
+window size: Overview, Fans, Lighting, Profiles, Display, Updates and GPU/diagnostics
+were navigable, and sensor/installed-firmware reads completed. One unsupported
+arrow glyph in update comparisons was replaced with a plain separator. No display,
+lighting, fan or performance setting was changed during this inspection. The app
+was exited with its Exit button; original settings matched the captured snapshot.
+
+New AC idle dry runs are **busier than the earlier baseline**, not confirmation
+of the earlier zero-I/O result:
+
+| Sample | CPU seconds / duration | One-core average | Process I/O operations / bytes | HID writes / reads |
+| --- | --- | --- | --- | --- |
+| Hidden initial | 0.359375 / 30 s | 1.198% | 16,166 / 2,332,860 | Not instrumented |
+| Visible initial | 0.1875 / 30 s | 0.625% | 10,138 / 1,460,020 | Not instrumented |
+| Hidden repeat | 0.46875 / 60 s | 0.781% | 19,454 / 2,810,544 | 0 / 0 |
+| Visible repeat | 0.09375 / 30 s | 0.312% | 9,316 / 1,348,712 | 0 / 0 |
+
+Display, brightness, power scheme and settings hashes matched in all four samples.
+Passive process-local counters show no repeated HID reports during the repeat
+windows. Other process I/O is not classified as file, network or graphics traffic
+by this measurement. The CPU variation and unclassified I/O remain open for the
+energy comparison; no battery-drain improvement is claimed. Agent activity and
+the desktop environment were not fully controlled, so these are diagnostic AC
+samples, not a causal comparison. Vendor takeover was skipped as designed.
+
+A closed-app AC dry run also passed with matching display, brightness, power scheme
+and settings hash, zero measured energy change and no battery-energy claim.
+
+The measurement script's console summary now correctly converts its ordered map
+to an object before selecting fields. The saved result JSON was already complete.
+Raw files: `diagnostic-reports/research/current-build-validation/`.
+
+The original snapshot for this session is Performance mode, all fan modes Auto,
+targets `[4500, 0, 0]`, keyboard brightness 176, static logo and battery care enabled.
+Restore this session's actual snapshot after the guided cooling checks; saved power
+profiles are separate and may request different battery-care settings.
+
 Perform physical/load tests on AC first, then the battery comparison last so
 GPU load and fan ramps have time to settle. Save work and keep vents clear.
 
