@@ -4,7 +4,12 @@ use crate::device::Device;
 use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{fs::File, path::Path, thread, time::Duration};
+mod native;
 mod preset;
+pub use native::{
+    configure_native_owner, native_mode, native_static_zones, restore_native_owner,
+    set_native_mode, NativeMode,
+};
 pub use preset::{Preset, Style};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -133,6 +138,22 @@ pub fn keyboard_effect(
         effect != KeyboardEffect::Spectrum,
         "Spectrum is advertised but did not apply on this firmware; no write sent"
     );
+    if native::active() {
+        let device = open()?;
+        let mut preset = Preset::capture(&read(&device)?, c::get_logo_mode(&device)?)?;
+        drop(device);
+        preset.color = rgb;
+        preset.style = match effect {
+            KeyboardEffect::Static => Style::Static,
+            KeyboardEffect::Breathing => Style::Breathing,
+            KeyboardEffect::Spectrum => unreachable!(),
+        };
+        if preset.style != Style::Static {
+            preset.underside_color = None;
+            preset.underside_keys = None;
+        }
+        return preset.apply(journal_path);
+    }
     let mut file = File::options().create_new(true).write(true).open(journal_path)?;
     let device = open()?;
     let original = read(&device)?;

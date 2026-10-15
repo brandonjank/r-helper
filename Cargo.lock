@@ -3342,13 +3342,14 @@ checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 
 [[package]]
 name = "r-helper"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "eframe",
  "embed-resource",
  "global-hotkey",
  "image",
+ "libloading 0.8.8",
  "librazer",
  "raw-window-handle",
  "serde",
@@ -3356,6 +3357,7 @@ dependencies = [
  "strum",
  "tray-icon",
  "windows 0.62.0",
+ "winreg 0.52.0",
 ]
 
 [[package]]

@@ -27,6 +27,8 @@ pub struct Info {
     pub current: Profile,
     pub rates: Vec<u32>,
     #[serde(default)]
+    pub modes: Vec<Profile>,
+    #[serde(default)]
     pub color_profile: Option<String>,
     #[serde(default)]
     pub associated_color_profiles: Vec<String>,
@@ -132,12 +134,35 @@ mod native {
     fn compatible(a: &DEVMODEW, b: &DEVMODEW) -> bool {
         a.dmPelsWidth == b.dmPelsWidth
             && a.dmPelsHeight == b.dmPelsHeight
-            && a.dmBitsPerPel == b.dmBitsPerPel
+            && compatible_format(a, b)
+    }
+    fn compatible_format(a: &DEVMODEW, b: &DEVMODEW) -> bool {
+        a.dmBitsPerPel == b.dmBitsPerPel
             && unsafe {
                 a.Anonymous1.Anonymous2.dmDisplayOrientation
                     == b.Anonymous1.Anonymous2.dmDisplayOrientation
                     && a.Anonymous2.dmDisplayFlags == b.Anonymous2.dmDisplayFlags
             }
+    }
+    #[cfg(test)]
+    #[test]
+    fn mode_preview_preserves_depth_orientation_and_scan_flags() {
+        let original = DEVMODEW {
+            dmPelsWidth: 2560,
+            dmPelsHeight: 1600,
+            dmBitsPerPel: 32,
+            ..Default::default()
+        };
+        let mut target = original;
+        target.dmPelsWidth = 1920;
+        target.dmPelsHeight = 1200;
+        assert!(!compatible(&original, &target));
+        assert!(compatible_format(&original, &target));
+        target.dmBitsPerPel = 16;
+        assert!(!compatible_format(&original, &target));
+        target.dmBitsPerPel = 32;
+        target.Anonymous1.Anonymous2.dmDisplayOrientation = DMDO_90;
+        assert!(!compatible_format(&original, &target));
     }
     fn color_profiles(name: PCWSTR) -> (Option<String>, Vec<String>) {
         use windows::Win32::{Foundation::LPARAM, UI::ColorSystem::*};
@@ -188,8 +213,30 @@ mod native {
         let name = PCWSTR(name.as_ptr());
         let current = mode(name, ENUM_CURRENT_SETTINGS)?;
         let mut rates = Vec::new();
+        let mut modes = Vec::new();
         for index in 0..4096 {
             let Ok(candidate) = mode(name, ENUM_DISPLAY_SETTINGS_MODE(index)) else { break };
+            if compatible_format(&current, &candidate)
+                && (640..=16384).contains(&candidate.dmPelsWidth)
+                && (480..=16384).contains(&candidate.dmPelsHeight)
+                && (24..=1000).contains(&candidate.dmDisplayFrequency)
+            {
+                let mut trial = current;
+                trial.dmPelsWidth = candidate.dmPelsWidth;
+                trial.dmPelsHeight = candidate.dmPelsHeight;
+                trial.dmDisplayFrequency = candidate.dmDisplayFrequency;
+                trial.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY;
+                if unsafe { ChangeDisplaySettingsExW(name, Some(&trial), None, CDS_TEST, None) }
+                    == DISP_CHANGE_SUCCESSFUL
+                {
+                    modes.push(Profile {
+                        panel: panel.clone(),
+                        width: trial.dmPelsWidth,
+                        height: trial.dmPelsHeight,
+                        hz: trial.dmDisplayFrequency,
+                    });
+                }
+            }
             if compatible(&current, &candidate)
                 && (24..=1000).contains(&candidate.dmDisplayFrequency)
             {
@@ -203,6 +250,8 @@ mod native {
                 }
             }
         }
+        modes.sort_by_key(|p| (p.width, p.height, p.hz));
+        modes.dedup();
         rates.sort_unstable();
         rates.dedup();
         let current = Profile {
@@ -217,19 +266,24 @@ mod native {
             "Current rate is not in the supported same-resolution list"
         );
         let (color_profile, associated_color_profiles) = color_profiles(name);
-        Ok(Info { current, rates, color_profile, associated_color_profiles })
+        Ok(Info { current, rates, modes, color_profile, associated_color_profiles })
     }
-    pub fn apply(profile: &Profile) -> Result<Info> {
+    pub fn apply(profile: &Profile, resolution: bool) -> Result<Info> {
         profile.validate()?;
         let before = inventory()?;
         ensure!(
             before.current.panel == profile.panel
-                && before.current.width == profile.width
-                && before.current.height == profile.height,
+                && (resolution
+                    || (before.current.width == profile.width
+                        && before.current.height == profile.height)),
             "Panel or resolution changed; refresh the profile before applying"
         );
         ensure!(
-            before.rates.contains(&profile.hz),
+            if resolution {
+                before.modes.contains(profile)
+            } else {
+                before.rates.contains(&profile.hz)
+            },
             "Refresh rate is no longer supported at this resolution"
         );
         let (identity, name) = panel()?;
@@ -237,15 +291,22 @@ mod native {
         let name = PCWSTR(name.as_ptr());
         let original = mode(name, ENUM_CURRENT_SETTINGS)?;
         ensure!(
-            original.dmPelsWidth == profile.width && original.dmPelsHeight == profile.height,
+            resolution
+                || (original.dmPelsWidth == profile.width
+                    && original.dmPelsHeight == profile.height),
             "Resolution changed before apply"
         );
-        if original.dmDisplayFrequency == profile.hz {
+        if before.current == *profile {
             return Ok(before);
         }
         let mut requested = original;
         requested.dmFields = DM_DISPLAYFREQUENCY;
         requested.dmDisplayFrequency = profile.hz;
+        if resolution {
+            requested.dmFields |= DM_PELSWIDTH | DM_PELSHEIGHT;
+            requested.dmPelsWidth = profile.width;
+            requested.dmPelsHeight = profile.height;
+        }
         ensure!(
             unsafe { ChangeDisplaySettingsExW(name, Some(&requested), None, CDS_TEST, None) }
                 == DISP_CHANGE_SUCCESSFUL,
@@ -264,6 +325,9 @@ mod native {
         if result.is_err() {
             let mut restore = original;
             restore.dmFields = DM_DISPLAYFREQUENCY;
+            if resolution {
+                restore.dmFields |= DM_PELSWIDTH | DM_PELSHEIGHT;
+            }
             ensure!(
                 unsafe { ChangeDisplaySettingsExW(name, Some(&restore), None, CDS_TYPE(0), None) }
                     == DISP_CHANGE_SUCCESSFUL,
@@ -285,6 +349,13 @@ pub fn inventory() -> Result<Info> {
     }
 }
 pub fn apply(profile: &Profile) -> Result<Info> {
+    apply_kind(profile, false)
+}
+/// Explicit manual Windows resolution/refresh selection; not firmware dual-panel mode.
+pub fn apply_mode(profile: &Profile) -> Result<Info> {
+    apply_kind(profile, true)
+}
+fn apply_kind(profile: &Profile, resolution: bool) -> Result<Info> {
     ensure!(
         crate::diagnostics::is_target_system(),
         "Display writes require the development Blade 18 model"
@@ -298,6 +369,7 @@ pub fn apply(profile: &Profile) -> Result<Info> {
                 .read(true)
                 .write(true)
                 .create(true)
+                .truncate(false)
                 .share_mode(0)
                 .open(std::env::temp_dir().join("rhelper-blade18-display.lock"))
             {
@@ -315,7 +387,7 @@ pub fn apply(profile: &Profile) -> Result<Info> {
     };
     #[cfg(windows)]
     {
-        native::apply(profile)
+        native::apply(profile, resolution)
     }
     #[cfg(not(windows))]
     {
@@ -326,12 +398,19 @@ pub fn apply(profile: &Profile) -> Result<Info> {
 pub fn restore(path: &std::path::Path) -> Result<Info> {
     let record: serde_json::Value = serde_json::from_slice(&std::fs::read(path)?)?;
     ensure!(
-        record["operation"] == "internal_panel_refresh" && record["model"] == "RZ09-0529",
+        matches!(
+            record["operation"].as_str(),
+            Some("internal_panel_refresh" | "internal_panel_mode")
+        ) && record["model"] == "RZ09-0529",
         "Not a Blade 18 display snapshot"
     );
     let profile: Profile =
         serde_json::from_value(record["original"].clone()).context("Invalid display snapshot")?;
-    apply(&profile)
+    if record["operation"] == "internal_panel_mode" {
+        apply_mode(&profile)
+    } else {
+        apply(&profile)
+    }
 }
 #[cfg(test)]
 mod tests {

@@ -1,4 +1,4 @@
-use anyhow::{ensure, Result};
+use anyhow::{ensure, Context, Result};
 use std::{
     fs::File,
     io::Write,
@@ -25,6 +25,12 @@ pub fn wait_for_confirmation() -> Result<()> {
     Ok(())
 }
 pub fn begin(target: &librazer::display::Profile) -> Result<serde_json::Value> {
+    begin_kind(target, false)
+}
+pub fn begin_mode(target: &librazer::display::Profile) -> Result<serde_json::Value> {
+    begin_kind(target, true)
+}
+fn begin_kind(target: &librazer::display::Profile, resolution: bool) -> Result<serde_json::Value> {
     ensure!(!PENDING.swap(true, Ordering::SeqCst), "A display change is awaiting confirmation");
     let result = (|| {
         let original = librazer::display::inventory()?.current;
@@ -34,7 +40,7 @@ pub fn begin(target: &librazer::display::Profile) -> Result<serde_json::Value> {
         let mut file = File::options().create_new(true).write(true).open(&path)?;
         serde_json::to_writer_pretty(
             &mut file,
-            &serde_json::json!({"model":"RZ09-0529","operation":"internal_panel_refresh","original":original,"requested":target}),
+            &serde_json::json!({"model":"RZ09-0529","operation":if resolution{"internal_panel_mode"}else{"internal_panel_refresh"},"original":original,"requested":target}),
         )?;
         file.sync_all()?;
         let mut command = std::process::Command::new(std::env::current_exe()?);
@@ -53,7 +59,11 @@ pub fn begin(target: &librazer::display::Profile) -> Result<serde_json::Value> {
             std::thread::sleep(Duration::from_millis(100));
         }
         ensure!(path.with_extension("ready").exists(), "Display guard not ready; no change sent");
-        let state = librazer::display::apply(target)?;
+        let state = if resolution {
+            librazer::display::apply_mode(target)?
+        } else {
+            librazer::display::apply(target)?
+        };
         ensure!(
             guard.try_wait()?.is_none() && !path.with_extension("done").exists(),
             "Display recovery deadline reached; previous rate is being restored"
@@ -103,7 +113,39 @@ pub fn finish(path: &Path, keep: bool) -> Result<librazer::display::Info> {
 pub fn dispatch() -> Option<Result<()>> {
     let mut args = std::env::args_os();
     args.next();
-    if args.next()?.to_str()? != "--display-guard" {
+    let mode = args.next()?;
+    if mode.to_str() == Some("--display-mode-test") {
+        return Some((|| {
+            let output = PathBuf::from(args.next().context("Expected test output")?);
+            ensure!(args.next().is_none(), "Unexpected argument");
+            let before = librazer::display::inventory()?;
+            let target = before
+                .modes
+                .iter()
+                .filter(|p| {
+                    p.width < before.current.width
+                        && p.height < before.current.height
+                        && p.hz == before.current.hz
+                        && p.width * before.current.height == p.height * before.current.width
+                })
+                .max_by_key(|p| p.width)
+                .context("No smaller matching-aspect mode to test")?;
+            let result = begin_mode(target)?;
+            let path =
+                PathBuf::from(result["display_pending"].as_str().context("Missing recovery path")?);
+            std::thread::sleep(Duration::from_secs(2));
+            let restored = finish(&path, false)?;
+            let file = File::options().create_new(true).write(true).open(output)?;
+            serde_json::to_writer_pretty(
+                &file,
+                &serde_json::json!({"original":before.current,"tested":target,"restored":restored.current==before.current,"firmware_panel_mode_changed":false}),
+            )?;
+            file.sync_all()?;
+            ensure!(restored.current == before.current, "Display mode test recovery mismatch");
+            Ok(())
+        })());
+    }
+    if mode.to_str() != Some("--display-guard") {
         return None;
     }
     Some((|| {
@@ -116,7 +158,11 @@ pub fn dispatch() -> Option<Result<()>> {
 fn guard(path: &Path) -> Result<()> {
     let record: serde_json::Value = serde_json::from_slice(&std::fs::read(path)?)?;
     ensure!(
-        record["model"] == "RZ09-0529" && record["operation"] == "internal_panel_refresh",
+        record["model"] == "RZ09-0529"
+            && matches!(
+                record["operation"].as_str(),
+                Some("internal_panel_refresh" | "internal_panel_mode")
+            ),
         "Invalid display recovery"
     );
     let target: librazer::display::Profile = serde_json::from_value(record["requested"].clone())?;
@@ -142,7 +188,11 @@ fn guard(path: &Path) -> Result<()> {
             Ok(info)
         })
     } else {
-        librazer::display::apply(&original)
+        if record["operation"] == "internal_panel_mode" {
+            librazer::display::apply_mode(&original)
+        } else {
+            librazer::display::apply(&original)
+        }
     };
     let mut file =
         File::options().create_new(true).write(true).open(path.with_extension("done"))?;

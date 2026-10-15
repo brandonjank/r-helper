@@ -22,6 +22,7 @@ jobs:
             target/release/rhelper-diagnostics.exe
             target/release/rhelper-display.exe
             target/release/rhelper-features.exe
+            target/release/rhelper-controls.exe
             LICENSE
             NOTICE
             THIRD_PARTY_LICENSES.md

@@ -30,5 +30,5 @@ strum_macros = "0.26.1"
 wgpu = { version = "25.0.2", optional = true, default-features = false, features = ["dx12", "wgsl"] }
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.62.0", features = ["Win32_System_Power", "Win32_Devices_Display", "Win32_Graphics_Gdi", "Win32_UI_ColorSystem"] }
+windows = { version = "0.62.0", features = ["Win32_System_Power", "Win32_Devices_Display", "Win32_Graphics_Gdi", "Win32_UI_ColorSystem", "Win32_System_Com", "Devices_Lights", "Devices_Enumeration", "Foundation", "System", "UI"] }
 winreg = { version = "0.52", features = ["transactions"] }

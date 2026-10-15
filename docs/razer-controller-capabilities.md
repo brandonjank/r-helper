@@ -1,5 +1,13 @@
 # Blade 18 controller capability inventory
 
+Current status is in the [autonomous discovery/implementation batch](blade18-autonomous-batch.md).
+Independent native underside RGB and privileged Razer takeover were physically
+validated before this batch. The elevated native-map/recovery batch and a -15 MHz
+GPU preview with verified restoration passed; individual cell positions still
+need physical mapping checks. The [extended-controls history](blade18-extended-controls.md)
+retains earlier experiments. Older unconfirmed statements below are historical;
+use the current batch and lighting evidence for present capability status.
+
 See the [controller discovery pass](blade18-discovery.md) for newly verified
 charger telemetry, the charge-once bit path, unsupported PWM getters and the
 distinction between unused library methods and actual hidden hardware features.

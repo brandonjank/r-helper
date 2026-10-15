@@ -35,6 +35,15 @@ impl Packet {
         self.crc = bytes[2..88].iter().fold(0, |crc, byte| crc ^ byte);
         self
     }
+    /// Blade standard-matrix protocol uses transaction FF and the usual XOR CRC.
+    pub(crate) fn blade_matrix_framing(mut self) -> Result<Self> {
+        self.ensure_blade18_access()?;
+        ensure!((self.command_class==3 && matches!(self.command_id,0x0a|0x0b)) || (self.command_class==0 && self.command_id==4),"Not a native lighting command");
+        self.id=0xff;
+        let bytes=bincode::serialize(&self)?;
+        self.crc=bytes[2..88].iter().fold(0,|crc,byte|crc^byte);
+        Ok(self)
+    }
     pub(crate) fn ensure_fan_lab_access(&self) -> Result<()> {
         let command = u16::from_be_bytes([self.command_class, self.command_id]);
         let args = &self.args[..usize::from(self.data_size).min(80)];
@@ -63,18 +72,29 @@ impl Packet {
                 [1, 5, 1 | 2, 0, 1, 1, _, _, _]
                     | [1, 5, 2, 0, 1, 2, _, _, _, _, _, _]
                     | [1, 5, 4, 1 | 2, 40, 0]
-                    | [1, 5, 5, 0, 2, 1, _, _, _]
+                    | [1, 5, 5, 0, 1..=4, 1, _, _, _]
                     | [1, 5, 8, 0, 0, 0]
+                    | [1, 5, 0, 0, 0, 0]
+                    | [1, 5, 7, 0, 1..=3, 2, _, _, _, _, _, _]
+                    | [1, 5, 6, 0, 2, 1, _, _, _]
             ),
             0x0f03 => {
                 args.len() == 62 && args[0..2] == [0, 5] && args[2] < 6 && args[3..5] == [0, 18]
             }
+            // Standard matrix encoder: this RB18's Razer driver logs seven
+            // rows. Fixed frame FF, columns 0..18; no variable storage or scan.
+            0x030a => args==[5,0],
+            0x0004 => matches!(args,[0|3,0]),
+            0x030b => args.len()==70 && args[0]==0xff && args[1]<=6 && args[2..4]==[0,18] && args[61..].iter().all(|v|*v==0),
             0x0300 if matches!(args, [1, 38, 0 | 1]) => true,
             0x0303 => matches!(args, [1, 38, _]),
             0x0300 => matches!(args, [1, 4, 0 | 1]),
             0x0302 => matches!(args, [1, 4, 0 | 2]),
             0x0712 => matches!(args, [0x50 | 0xd0]),
             0x070f => matches!(args, [8 | 12]),
+            0x0206 => matches!(args, [0 | 1, 0 | 1]),
+            0x0008 => matches!(args, [0 | 1, 0, 0, 0]),
+            0x0f10 => matches!(args, [0 | 1]),
             0x0d02 => {
                 matches!(args, [1, 1 | 2, 0 | 2 | 4 | 5 | 6 | 7, 0 | 1] | [0, 1 | 2, 0, 0 | 1])
             }
@@ -101,11 +121,32 @@ impl Packet {
         let command = u16::from_be_bytes([self.command_class, self.command_id]);
         let args = &self.args[..usize::from(self.data_size).min(self.args.len())];
         let allowed = match command {
+            // Source-backed keyboard/lighting discovery. Fixed profiles only;
+            // no remapping, test mode, reset, firmware or selector scans.
+            0x0088 => args == [0; 4],
+            0x0389 => args == [0; 80],
+            0x038e => args.len()==80 && args[..2]==[1,38] && args[2..].iter().all(|v|*v==0),
+            0x0286 => matches!(args, [0 | 1, 0]),
+            0x02a8 | 0x02a4 => args == [0],
+            0x02a7 => args.len()==15 && args[0]==1 && args[1..].iter().all(|v|*v==0),
+            0x00dd => args == [1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            0x00da => args == [1, 0, 0],
+            0x0f86 => args == [1, 0],
+            0x0f90 => args == [0],
+            0x0f94 => args == [1, 0],
+            0x0782 | 0x0790 | 0x0795 => args == [0],
+            0x0783 | 0x0788 => args == [0, 0],
+            0x078b => args == [0; 5],
+            0x0793 => args == [1, 0, 0],
             0x0081 => args == [0, 0],
             0x0d85 => args == [0, 1, 0, 0],
             // Vendor model-711 middleware: fixed-shape capability getters only.
             0x0d80 => args == [0; 80],
             0x0d83 => args == [0; 12],
+            // Shared Razer module declares the 80-byte getter adjacent to the
+            // fan-table setter. Request header is a single, explicitly inferred
+            // class-0 / fan-1 / curve-0 candidate; no selector or class sweep.
+            0x0d84 => args.len()==80 && args[..3]==[0,1,0] && args[3..].iter().all(|v|*v==0),
             0x0d8a | 0x0d8b => args == [0, 0],
             0x0d89 => args == [0, 0],
             0x0d8e | 0x0f98 => args == [0],
@@ -168,6 +209,9 @@ impl Packet {
 
     pub fn get_args(&self) -> &[u8] {
         &self.args
+    }
+    pub(crate) fn payload(&self) -> &[u8] {
+        &self.args[..usize::from(self.data_size).min(self.args.len())]
     }
 
     pub fn ensure_matches_report(&self, report: &Packet) -> Result<()> {
@@ -237,6 +281,46 @@ impl TryFrom<&[u8]> for Packet {
 
 #[cfg(test)]
 mod diagnostic_tests {
+    #[test]
+    fn inferred_fan_table_probe_is_read_only_and_exactly_scoped() {
+        let mut args=vec![0;80];args[1]=1;
+        Packet::new(0x0d84,&args).ensure_diagnostic_query().unwrap();
+        assert!(Packet::new(0x0d04,&args).ensure_blade18_access().is_err());
+        for index in [0,1,2,3,79] {let mut invalid=args.clone();invalid[index]=invalid[index].wrapping_add(1);assert!(Packet::new(0x0d84,&invalid).ensure_diagnostic_query().is_err());}
+        assert!(Packet::new(0x0d84,&args[..3]).ensure_diagnostic_query().is_err());
+    }
+    #[test]
+    fn standard_blade_matrix_framing_is_scoped_and_bounded() {
+        let mut row=[0;70];row[..4].copy_from_slice(&[0xff,6,0,18]);
+        row[4..61].fill(128);
+        let packet=super::Packet::new(0x030b,&row).blade_matrix_framing().unwrap();
+        assert_eq!(packet.id,0xff);
+        let bytes=bincode::serialize(&packet).unwrap();
+        assert_eq!(packet.crc,bytes[2..88].iter().fold(0,|crc,byte|crc^byte));
+        assert!(super::Packet::new(0x030a,&[5,0]).blade_matrix_framing().is_ok());
+        for mode in [0,3] {assert!(super::Packet::new(0x0004,&[mode,0]).blade_matrix_framing().is_ok());}
+        assert!(super::Packet::new(0x0004,&[1,0]).ensure_blade18_access().is_err());
+        assert!(super::Packet::new(0x0004,&[3,1]).ensure_blade18_access().is_err());
+        assert!(super::Packet::new(0x0004,&[3,0]).ensure_diagnostic_query().is_err());
+        for (offset,value) in [(0,0),(1,7),(2,1),(3,19),(61,1)]{
+            let mut bad=row;bad[offset]=value;
+            assert!(super::Packet::new(0x030b,&bad).ensure_blade18_access().is_err());
+        }
+        assert!(super::Packet::new(0x030a,&[5,1]).ensure_blade18_access().is_err());
+        assert!(super::Packet::new(0x0d01,&[0,1,40]).blade_matrix_framing().is_err());
+        assert!(super::Packet::new(0x030b,&row).ensure_diagnostic_query().is_err());
+    }
+    #[test]
+    fn underside_color_table_remains_a_fixed_read_only_query() {
+        let mut data=[0;80];data[..2].copy_from_slice(&[1,38]);
+        assert!(super::Packet::new(0x038e,&data).ensure_diagnostic_query().is_ok());
+        assert!(super::Packet::new(0x030e,&data).ensure_blade18_access().is_err());
+        assert!(super::Packet::new(0x030c,&data).ensure_blade18_access().is_err());
+        for index in [0,1,2,79] {
+            let mut invalid=data;invalid[index]^=1;
+            assert!(super::Packet::new(0x038e,&invalid).ensure_diagnostic_query().is_err());
+        }
+    }
     use super::Packet;
     #[test]
     fn feature_batch_writes_are_bounded_to_keyboard_and_charge_bit_patterns() {
@@ -325,7 +409,7 @@ mod diagnostic_tests {
         assert!(reply.ensure_matches_report(&request).is_err());
     }
     #[test]
-    fn static_keyboard_setter_cannot_write_other_regions_effects_or_frames() {
+    fn keyboard_headers_cannot_escape_audited_effect_shapes() {
         let valid = [1, 5, 1, 0, 1, 1, 32, 64, 255];
         assert!(Packet::new(0x0f02, &valid).ensure_blade18_access().is_ok());
         assert!(Packet::new(0x0f02, &valid).ensure_diagnostic_query().is_err());
@@ -335,7 +419,7 @@ mod diagnostic_tests {
                 args[field] = value;
                 assert_eq!(
                     Packet::new(0x0f02, &args).ensure_blade18_access().is_ok(),
-                    value == valid[field] || (field == 2 && value == 2)
+                    value == valid[field] || (field == 2 && matches!(value, 2 | 5))
                 );
             }
         }
@@ -438,7 +522,7 @@ mod diagnostic_tests {
             (0x0d07, vec![1, 1, 4]),
             (0x0d02, vec![1, 1, 3, 0]),
             (0x0d01, vec![0, 1, 56]),
-            (0x0004, vec![3, 0]),
+            (0x0004, vec![1, 0]),
             (0x070f, vec![2]),
         ] {
             assert!(Packet::new(cmd, &args).ensure_blade18_access().is_err());
@@ -559,6 +643,52 @@ mod diagnostic_tests {
         response.args[0] = 2;
         response.command_id = 0x88;
         assert!(response.ensure_matches_report(&report).is_err());
+    }
+
+    #[test]
+    fn extended_controls_keep_getters_separate_and_reject_unverified_modes() {
+        for (command, args) in
+            [(0x0286, vec![1, 0]), (0x0088, vec![0; 4]), (0x0f90, vec![0]), (0x0389, vec![0; 80])]
+        {
+            assert!(Packet::new(command, &args).ensure_diagnostic_query().is_ok());
+        }
+        for (command, args) in [(0x0206, vec![1, 1]), (0x0008, vec![1, 0, 0, 0]), (0x0f10, vec![1])]
+        {
+            let p = Packet::new(command, &args);
+            assert!(p.ensure_diagnostic_query().is_err());
+            assert!(p.ensure_blade18_access().is_ok());
+        }
+        for (command, args) in [
+            (0x0206, vec![2, 1]),
+            (0x0206, vec![1, 2]),
+            (0x0008, vec![3, 0, 0, 0]),
+            (0x0713, vec![1, 1, 1]),
+            (0x0004, vec![2, 0]),
+            (0x000b, vec![1]),
+        ] {
+            assert!(Packet::new(command, &args).ensure_blade18_access().is_err());
+        }
+    }
+    #[test]
+    fn firmware_effect_timing_and_color_counts_are_bounded() {
+        for args in [
+            vec![1, 5, 4, 2, 40, 0],
+            vec![1, 5, 5, 0, 4, 1, 1, 2, 3],
+            vec![1, 5, 7, 0, 3, 2, 1, 2, 3, 4, 5, 6],
+            vec![1, 5, 6, 0, 2, 1, 1, 2, 3],
+            vec![1, 5, 0, 0, 0, 0],
+        ] {
+            assert!(Packet::new(0x0f02, &args).ensure_blade18_access().is_ok());
+        }
+        for args in [
+            vec![1, 5, 4, 2, 15, 0],
+            vec![1, 5, 4, 2, 16, 0],
+            vec![1, 5, 5, 0, 5, 1, 1, 2, 3],
+            vec![1, 5, 7, 0, 0, 2, 1, 2, 3, 4, 5, 6],
+            vec![1, 5, 3, 0, 0, 0],
+        ] {
+            assert!(Packet::new(0x0f02, &args).ensure_blade18_access().is_err());
+        }
     }
 
     #[test]

@@ -5,6 +5,16 @@ use librazer::blade18::{
     lighting::{Preset, Style},
 };
 use std::{fs::File, io::Write, path::PathBuf};
+fn cases_pass(cases: &[serde_json::Value]) -> bool {
+    !cases.is_empty()
+        && cases.iter().all(|case| {
+            if case.get("style").is_some() {
+                case["passed"] == true && case["restored"] == true
+            } else {
+                case["charge_roundtrip"] == true
+            }
+        })
+}
 #[derive(Parser)]
 struct Args {
     #[arg(long)]
@@ -102,7 +112,7 @@ fn main() -> Result<()> {
         let start = std::time::Instant::now();
         let mut cases = vec![];
         let test = (|| {
-            for (i, style) in [
+            let mut effects = [
                 Style::Static,
                 Style::Breathing,
                 Style::DualBreathing,
@@ -110,16 +120,28 @@ fn main() -> Result<()> {
                 Style::WaveRight,
                 Style::Reactive,
                 Style::PerKey,
+                Style::Off,
+                Style::Starlight,
+                Style::Ripple,
             ]
             .into_iter()
-            .enumerate()
-            {
+            .map(|style| (style, None))
+            .collect::<Vec<_>>();
+            effects.extend([
+                (Style::Reactive, Some(1)),
+                (Style::Reactive, Some(3)),
+                (Style::Reactive, Some(4)),
+                (Style::Starlight, Some(1)),
+                (Style::Starlight, Some(3)),
+            ]);
+            for (i, (style, speed)) in effects.into_iter().enumerate() {
                 ensure!(
                     start.elapsed().as_secs() < 45 && guard.try_wait()?.is_none(),
                     "Recovery deadline reached"
                 );
                 let mut preset = original.clone();
                 preset.style = style;
+                preset.speed = speed;
                 preset.second = [255, 64, 32];
                 for (k, color) in preset.keys.iter_mut().enumerate() {
                     *color = if (k / 19) % 2 == 0 { [32, 64, 255] } else { [255, 64, 32] };
@@ -131,7 +153,7 @@ fn main() -> Result<()> {
                     "Recovery deadline reached"
                 );
                 let restore = original.apply(&a.output.with_extension(format!("restore{i}.json")));
-                cases.push(serde_json::json!({"style":style,"passed":result.is_ok(),"error":result.err().map(|e|format!("{e:#}")),"restored":restore.is_ok()}));
+                cases.push(serde_json::json!({"style":style,"speed":speed,"passed":result.is_ok(),"error":result.err().map(|e|format!("{e:#}")),"restored":restore.is_ok()}));
                 restore?;
             }
             let enabled =
@@ -146,11 +168,13 @@ fn main() -> Result<()> {
         let restored = original.apply(&a.output.with_extension("final-restore.json"));
         let charge_restored =
             blade18::charge::set(charge, &a.output.with_extension("final-charge.json"));
+        let passed =
+            test.is_ok() && restored.is_ok() && charge_restored.is_ok() && cases_pass(&cases);
         writeln!(
             file,
             "{}",
             serde_json::to_string_pretty(
-                &serde_json::json!({"cases":cases,"restored":restored.is_ok(),"charge_restored":charge_restored.is_ok(),"error":test.as_ref().err().map(|e|format!("{e:#}"))})
+                &serde_json::json!({"passed":passed,"cases":cases,"restored":restored.is_ok(),"charge_restored":charge_restored.is_ok(),"error":test.as_ref().err().map(|e|format!("{e:#}"))})
             )?
         )?;
         file.sync_all()?;
@@ -163,6 +187,7 @@ fn main() -> Result<()> {
             .sync_all()?;
         let _ = guard.wait();
         test?;
+        ensure!(passed, "One or more lighting cases failed; inspect the report");
     } else {
         writeln!(
             file,
@@ -176,6 +201,20 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn failed_or_unrestored_cases_cannot_report_batch_success() {
+        assert!(!cases_pass(&[]));
+        assert!(!cases_pass(&[
+            serde_json::json!({"style":"Spectrum","passed":false,"restored":true})
+        ]));
+        assert!(!cases_pass(&[
+            serde_json::json!({"style":"Static","passed":true,"restored":false})
+        ]));
+        assert!(cases_pass(&[
+            serde_json::json!({"style":"Static","passed":true,"restored":true}),
+            serde_json::json!({"charge_roundtrip":true})
+        ]));
+    }
     #[test]
     fn recovery_and_mutations_require_separate_journals() {
         assert!(Args::try_parse_from(["features", "--validate-lighting"]).is_err());

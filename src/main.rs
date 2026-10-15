@@ -1,13 +1,17 @@
 #![windows_subsystem = "windows"]
 
 mod blade_app;
+mod blade_auxiliary;
 mod blade_batch_test;
 mod blade_curves;
 mod blade_desktop;
 mod blade_display;
 mod blade_policy;
+mod blade_platform;
+mod blade_gpu;
 mod blade_power;
 mod blade_profiles;
+mod blade_vendor;
 mod device;
 mod messaging;
 mod power;
@@ -1312,6 +1316,25 @@ fn set_windows_app_id() {
 fn set_windows_app_id() {}
 
 fn main() -> Result<(), eframe::Error> {
+    if let Some(result)=blade_gpu::dispatch() {if let Err(error)=result{eprintln!("GPU preview: {error:#}");std::process::exit(1);}return Ok(());}
+    if let Some(result)=blade_platform::dispatch() {
+        if let Err(error)=result {eprintln!("Platform diagnostics: {error:#}");std::process::exit(1);}
+        return Ok(());
+    }
+    if let Some(result) = blade_auxiliary::dispatch() {
+        if let Err(error) = result {
+            eprintln!("Auxiliary lighting: {error:#}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+    if let Some(result) = blade_vendor::dispatch() {
+        if let Err(error) = result {
+            eprintln!("Razer ownership: {error:#}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     if let Some(result) = blade_batch_test::dispatch() {
         if let Err(error) = result {
             eprintln!("Batch test: {error:#}");
@@ -1334,6 +1357,11 @@ fn main() -> Result<(), eframe::Error> {
         return blade_app::run_preview();
     }
     if librazer::diagnostics::is_target_system() {
+        let _instance = match blade_vendor::UiInstance::acquire() {
+            Ok(Some(lease)) => lease,
+            Ok(None) => return Ok(()),
+            Err(error) => return Err(eframe::Error::AppCreation(error.into())),
+        };
         return blade_app::run();
     }
     let initial_height = 500.0;

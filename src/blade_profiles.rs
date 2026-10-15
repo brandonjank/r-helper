@@ -28,6 +28,8 @@ pub struct Settings {
     pub application_switching: bool,
     #[serde(default)]
     pub lighting_policy: LightingPolicy,
+    #[serde(default)]
+    pub manage_razer_software: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -139,6 +141,7 @@ impl Default for Settings {
             named: vec![],
             application_switching: false,
             lighting_policy: LightingPolicy::default(),
+            manage_razer_software: false,
         }
     }
 }
@@ -230,6 +233,7 @@ pub fn import(data: &str) -> Result<Settings> {
     settings.automatic = false;
     settings.application_switching = false;
     settings.lighting_policy.enabled = false;
+    settings.manage_razer_software = false;
     Ok(settings)
 }
 pub fn save(path: &Path, settings: &Settings) -> Result<()> {
@@ -272,6 +276,7 @@ mod tests {
                 gpu: Some(librazer::types::GpuBoost::Low),
             },
             lighting: librazer::blade18::lighting::Preset {
+                speed: None,
                 style: librazer::blade18::lighting::Style::Static,
                 color: [32, 64, 255],
                 second: [255, 64, 32],
@@ -279,6 +284,8 @@ mod tests {
                 brightness: 176,
                 underside: false,
                 underside_brightness: 64,
+                underside_color: None,
+                underside_keys: None,
                 logo: librazer::types::LogoMode::Static,
             },
             display: librazer::display::Profile {
@@ -291,6 +298,31 @@ mod tests {
         }
     }
     #[test]
+    fn independent_underside_profiles_roundtrip_and_reject_animated_keyboard() {
+        let mut p = named();
+        p.lighting.underside_color = Some([255, 0, 0]);
+        p.lighting.underside = true;
+        let encoded = serde_json::to_vec(&p).unwrap();
+        let decoded: Named = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(decoded.lighting.underside_color, Some([255, 0, 0]));
+        decoded.lighting.validate().unwrap();
+        p.lighting.style = librazer::blade18::lighting::Style::WaveLeft;
+        assert!(p.lighting.validate().is_err());
+        p.lighting.style = librazer::blade18::lighting::Style::PerKey;
+        p.lighting.underside_keys = Some(vec![[0, 255, 0]; 19]);
+        p.lighting.validate().unwrap();
+        let encoded = serde_json::to_vec(&p).unwrap();
+        let decoded: Named = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(decoded.lighting.underside_keys, p.lighting.underside_keys);
+        p.lighting.underside_keys.as_mut().unwrap().pop();
+        assert!(p.lighting.validate().is_err());
+
+        let mut legacy = serde_json::to_value(named()).unwrap();
+        legacy["lighting"].as_object_mut().unwrap().remove("underside_color");
+        let legacy: Named = serde_json::from_value(legacy).unwrap();
+        assert!(legacy.lighting.underside_color.is_none());
+    }
+    #[test]
     fn imported_profiles_cannot_enable_automation_and_maximum_export_roundtrips() {
         let p = named();
         let mut settings = Settings {
@@ -301,6 +333,7 @@ mod tests {
             ..Default::default()
         };
         settings.lighting_policy.enabled = true;
+        settings.manage_razer_software = true;
         for i in 0..32 {
             let mut p = p.clone();
             p.name = format!("Profile {i}");
@@ -313,6 +346,7 @@ mod tests {
             !imported.automatic
                 && !imported.application_switching
                 && !imported.lighting_policy.enabled
+                && !imported.manage_razer_software
         );
         settings.named.push(named());
         assert!(settings.validate().is_err());
