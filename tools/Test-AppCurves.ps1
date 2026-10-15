@@ -10,7 +10,7 @@ if(Test-Path -LiteralPath $directory){throw 'Choose a new session directory.'}
 [IO.Directory]::CreateDirectory($directory)|Out-Null
 $exe=Join-Path $root "target\$BuildConfiguration\rhelper.exe"
 $thermalExe=Join-Path $root "target\$BuildConfiguration\rhelper-thermal.exe"
-$config=@{schema=1;downward_hold_seconds=5;session_seconds=$(if($Scenario -eq 'Timeout'){30}else{120});zones=@(
+$config=@{schema=1;downward_hold_seconds=5;session_seconds=$(if($Scenario -eq 'Timeout'){30}elseif($Scenario -eq 'SleepResume'){300}else{120});zones=@(
     @{source='EcA';points=@(@{celsius=50;rpm=4000},@{celsius=80;rpm=4500})},
     @{source='EcB';points=@(@{celsius=35;rpm=4000},@{celsius=70;rpm=4500})},
     @{source='Hottest';points=@(@{celsius=50;rpm=3000},@{celsius=80;rpm=3500})}
@@ -57,8 +57,15 @@ try {
         'AcLoss' {@{scenario=$Scenario;instruction='Unplug AC now and leave it unplugged until restoration is verified.'}|ConvertTo-Json|Set-Content (Join-Path $directory 'awaiting-owner.json')}
         'SleepResume' {@{scenario=$Scenario;instruction='Sleep for at least 15 seconds, then wake and unlock. Owner confirmation is required to establish physical sleep.'}|ConvertTo-Json|Set-Content (Join-Path $directory 'awaiting-owner.json')}
     }
-    $deadline=[DateTime]::UtcNow.AddSeconds($(if($Scenario -in @('AcLoss','SleepResume')){120}else{45}))
+    $deadline=[DateTime]::UtcNow.AddSeconds($(if($Scenario -eq 'SleepResume'){300}elseif($Scenario -eq 'AcLoss'){120}else{45}))
+    $lastCheck=[DateTime]::UtcNow
     do {
+        $now=[DateTime]::UtcNow
+        if($Scenario -eq 'SleepResume' -and ($now-$lastCheck).TotalSeconds -ge 5){
+            $test['harness_pause_seconds']=($now-$lastCheck).TotalSeconds
+            $deadline=$now.AddSeconds(45)
+        }
+        $lastCheck=$now
         if($Scenario -eq 'WatchdogExit'){
             $status=Get-Content (Join-Path $directory 'status.json') -Raw|ConvertFrom-Json
             if($status.phase -eq 'stopped'){

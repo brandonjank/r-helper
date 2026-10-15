@@ -248,20 +248,20 @@ impl BladeApp {
                     });
                     section_card(ui, section, Section::Fans, "Fans + temperatures", |ui| {
                         ui.columns(3, |columns| {
-                            metric(&mut columns[0], "FAN 1", &format!("{} RPM", state.fan_actual[0]));
-                            metric(&mut columns[1], "FAN 2", &format!("{} RPM", state.fan_actual[1]));
+                            metric(&mut columns[0], "FAN 1 · LEFT", &format!("{} RPM", state.fan_actual[0]));
+                            metric(&mut columns[1], "FAN 2 · RIGHT", &format!("{} RPM", state.fan_actual[1]));
                             let third = self.sensor_report.as_ref().and_then(|r| {
                                 let reading = &r["sensor_candidates"]["getters"]["fan_zone_3_actual_rpm"];
                                 (reading["ok"] == true).then(|| reading["response_args"][2].as_u64()).flatten()
                             }).map(|rpm| format!("{} RPM", rpm * 100)).unwrap_or_else(|| "—".into());
-                            metric(&mut columns[2], "FAN 3", &third);
+                            metric(&mut columns[2], "FAN 3 · CENTER", &third);
                         });
                         ui.horizontal_wrapped(|ui| {
                             ui.label(format!("EC A: {}", temperature(self.sensor_report.as_ref(), 1)));
                             ui.label(format!("EC B: {}", temperature(self.sensor_report.as_ref(), 2)));
                             if ui.add_enabled(enabled, egui::Button::new("Read sensors")).clicked() { read_sensors = true; }
                         });
-                        hint(ui, if self.curve_events.is_some(){"Live controller readings while curves run · physical roles unresolved"}else{"Snapshots only · EC sensor proxies · physical fan roles unresolved"});
+                        hint(ui, if self.curve_events.is_some(){"Live controller readings while curves run · airflow locations mapped on this RB18"}else{"Snapshots only · EC temperature proxies · left / right / center airflow observed"});
                         ui.horizontal_wrapped(|ui| {
                             ui.label(format!("Cooling: {:?}", state.fan_mode));
                             if ui.add_enabled(enabled, egui::Button::new("Automatic").selected(state.fan_mode == FanMode::Auto)).clicked() { requested = Some(Change::AutoFans); }

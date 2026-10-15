@@ -21,7 +21,11 @@ also change settings. Settings and recovery journals are stored under
 Ordinary controls do not require running the whole app as administrator. Pausing
 Razer services requires administrator access. Use Exit to restore Razer software;
 closing the window normally hides it in the tray. Supervised curves have separate
-recovery and remain experimental until the saved guided validation is completed.
+recovery and remain experimental. The guided checks verified post-wake recovery,
+but manual speeds continued through Modern Standby. Stop custom curves before
+putting the laptop to Sleep. The numbered fans map to left rear, right rear and
+center/battery-area airflow on the tested RB18; EC readings remain proxies, and
+no battery-temperature sensor has been validated.
 
 If an operation fails, read the footer message and open GPU + diagnostics to copy
 the latest report. Check that companion executables are present and retry a read.
