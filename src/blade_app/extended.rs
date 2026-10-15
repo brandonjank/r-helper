@@ -1,3 +1,4 @@
+use super::batch::BaselinePolicy;
 use super::*;
 use librazer::blade18::extended::Control;
 impl BladeApp {
@@ -84,7 +85,7 @@ impl BladeApp {
             });
         });
         if read_lamps {
-            self.batch_job(ctx,"Inspect Windows lighting",|| {
+            self.batch_job(ctx,"Inspect Windows lighting",BaselinePolicy::Preserve, || {
                 // A metadata-only helper never becomes the foreground lighting owner.
                 let output=blade_profiles::journal_path("lamp-inventory")?;
                 let mut command=std::process::Command::new(std::env::current_exe()?.with_file_name("rhelper-controls.exe"));
@@ -99,13 +100,18 @@ impl BladeApp {
             let color = self.lamp_color;
             let highlight = self.lamp_highlight.then_some(self.lamp_index);
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-            self.batch_job(ctx, "Test auxiliary RGB and restore lighting", move || {
-                crate::blade_auxiliary::run(
-                    color,
-                    highlight,
-                    &blade_profiles::journal_path("auxiliary-test")?,
-                )
-            });
+            self.batch_job(
+                ctx,
+                "Test auxiliary RGB and restore lighting",
+                BaselinePolicy::Preserve,
+                move || {
+                    crate::blade_auxiliary::run(
+                        color,
+                        highlight,
+                        &blade_profiles::journal_path("auxiliary-test")?,
+                    )
+                },
+            );
         }
         super::view::card(ui, "Display mode preview", |ui| {
             if ui.add_enabled(enabled, egui::Button::new("Read supported display modes")).clicked()
@@ -142,12 +148,12 @@ impl BladeApp {
             ui.small("Windows resolution + refresh rate, with Keep/Revert. This does not switch the panel's firmware mode. After keeping a new resolution, save refresh profiles again.");
         });
         if display_read {
-            self.batch_job(ctx, "Read display modes", || {
+            self.batch_job(ctx, "Read display modes", BaselinePolicy::Preserve, || {
                 Ok(serde_json::json!({"display_controls":librazer::display::inventory()?}))
             });
         }
         if let Some(target) = display_preview {
-            self.batch_job(ctx, "Preview display mode", move || {
+            self.batch_job(ctx, "Preview display mode", BaselinePolicy::Preserve, move || {
                 crate::blade_display::begin_mode(&target)
             });
         }
@@ -210,7 +216,7 @@ impl BladeApp {
             ui.small("Model RZ09-0529 · manual updates only. Review the official instructions and exact SKU before installing. No background update checks.");
         });
         if let Some(refresh) = updates {
-            self.batch_job(ctx, "Check firmware and driver versions", move || {
+            self.batch_job(ctx, "Check firmware and driver versions", BaselinePolicy::Preserve, move || {
                 Ok(serde_json::json!({"updates_inventory":crate::blade_updates::inspect(refresh)?}))
             });
         }
@@ -299,22 +305,30 @@ impl BladeApp {
         });
         if gpu_preview {
             let offsets = self.batch.gpu_offsets;
-            self.batch_job(ctx, "Preview NVIDIA clock offsets", move || {
-                crate::blade_gpu::preview(offsets, &blade_profiles::journal_path("gpu-preview")?)
-            });
+            self.batch_job(
+                ctx,
+                "Preview NVIDIA clock offsets",
+                BaselinePolicy::Preserve,
+                move || {
+                    crate::blade_gpu::preview(
+                        offsets,
+                        &blade_profiles::journal_path("gpu-preview")?,
+                    )
+                },
+            );
         }
         if platform {
-            self.batch_job(ctx, "Read platform capabilities", || {
+            self.batch_job(ctx, "Read platform capabilities", BaselinePolicy::Preserve, || {
                 Ok(serde_json::json!({"platform_inventory":crate::blade_platform::inspect()?}))
             });
         }
         if inspect {
-            self.batch_job(ctx,"Inspect controller features",|| {
+            self.batch_job(ctx,"Inspect controller features",BaselinePolicy::Preserve, || {
                 Ok(serde_json::json!({"extended_controls":blade18::extended::status(),"controller_telemetry":blade18::extended::telemetry(),"extended_inventory":blade18::extended::inventory()?}))
             });
         }
         if run_batch {
-            self.batch_job(ctx,"Test keyboard controls",|| {
+            self.batch_job(ctx,"Test keyboard controls",BaselinePolicy::Preserve, || {
                 let output=blade_profiles::journal_path("keyboard-batch")?;
                 let executable=std::env::current_exe()?.with_file_name("rhelper-controls.exe");
                 anyhow::ensure!(executable.is_file(),"Keyboard test tool is missing beside R-Helper");
@@ -327,7 +341,7 @@ impl BladeApp {
             });
         }
         if let Some(change) = requested {
-            self.batch_job(ctx,if change.is_some(){"Set keyboard behavior"}else{"Read keyboard behavior"},move|| {
+            self.batch_job(ctx,if change.is_some(){"Set keyboard behavior"}else{"Read keyboard behavior"},BaselinePolicy::Preserve,move|| {
                 if let Some((control,value))=change {control.apply(&value,&blade_profiles::journal_path("keyboard-control")?)?;}
                 Ok(serde_json::json!({"extended_controls":blade18::extended::status(),"controller_telemetry":blade18::extended::telemetry()}))
             });

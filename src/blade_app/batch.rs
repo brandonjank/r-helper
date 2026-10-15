@@ -40,11 +40,19 @@ impl Default for BatchUi {
         }
     }
 }
+/// Whether a successful operation replaces the application-profile restore point.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum BaselinePolicy {
+    Preserve,
+    CaptureManual,
+}
+
 impl BladeApp {
     pub(super) fn batch_job(
         &mut self,
         ctx: &egui::Context,
         label: &str,
+        baseline: BaselinePolicy,
         work: impl FnOnce() -> anyhow::Result<serde_json::Value> + Send + 'static,
     ) {
         if self.preview || self.job.is_some() || self.sensor_job.is_some() {
@@ -56,7 +64,7 @@ impl BladeApp {
         let repaint = ctx.clone();
         let curves = self.curve_control.clone();
         let policy = self.batch.watcher.as_ref().map(|w| w.sender());
-        let manual = label.starts_with("Apply") || label.starts_with("Keep");
+        let manual = baseline == BaselinePolicy::CaptureManual;
         std::thread::spawn(move || {
             let result: anyhow::Result<serde_json::Value> = (|| {
                 crate::blade_curves::stop_and_wait(&curves)?;
@@ -109,6 +117,7 @@ impl BladeApp {
                 self.batch_job(
                     ctx,
                     if keep { "Keep display mode" } else { "Restore display mode" },
+                    if keep { BaselinePolicy::CaptureManual } else { BaselinePolicy::Preserve },
                     move || {
                         crate::blade_display::finish(&path, keep)
                             .map(|s| serde_json::json!({"display_controls":s}))
@@ -236,20 +245,25 @@ impl BladeApp {
             self.persist();
         }
         if let Some(preset) = apply {
-            self.batch_job(ctx, "Apply lighting preset", move || {
-                let s = preset.apply(&blade_profiles::journal_path("lighting-preset")?)?;
-                Ok(serde_json::json!({"lighting_controls":s,"device_state":blade18::status()?}))
-            });
+            self.batch_job(
+                ctx,
+                "Apply lighting preset",
+                BaselinePolicy::CaptureManual,
+                move || {
+                    let s = preset.apply(&blade_profiles::journal_path("lighting-preset")?)?;
+                    Ok(serde_json::json!({"lighting_controls":s,"device_state":blade18::status()?}))
+                },
+            );
         }
         if let Some(name) = capture {
-            self.batch_job(ctx, "Capture named profile", move || {
+            self.batch_job(ctx, "Capture named profile", BaselinePolicy::Preserve, move || {
                 let p = blade_profiles::Named::capture(name)?;
                 p.validate()?;
                 Ok(serde_json::json!({"named_capture":p}))
             });
         }
         if let Some((index, name, executable)) = replace {
-            self.batch_job(ctx, "Update named profile", move || {
+            self.batch_job(ctx, "Update named profile", BaselinePolicy::Preserve, move || {
                 let mut p = blade_profiles::Named::capture(name)?;
                 p.executable = executable;
                 p.validate()?;
@@ -257,12 +271,12 @@ impl BladeApp {
             });
         }
         if let Some(value) = charge {
-            self.batch_job(ctx, "Set one-time charging", move || {
+            self.batch_job(ctx, "Set one-time charging", BaselinePolicy::Preserve, move || {
                 blade18::charge::set(value, &blade_profiles::journal_path("charge-once")?)
                     .map(|v| serde_json::json!({"charge_once":v}))
             });
         } else if read_charge {
-            self.batch_job(ctx, "Read charging status", || {
+            self.batch_job(ctx, "Read charging status", BaselinePolicy::Preserve, || {
                 blade18::charge::active().map(|v| serde_json::json!({"charge_once":v}))
             });
         }
