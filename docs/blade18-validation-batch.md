@@ -296,3 +296,16 @@ run verified the airflow observations and post-wake recovery; CPU die/battery
 sensors and a reliable added-energy attribution remain unresolved.
 Firmware curve-table setters, wider fan limits and unattended/battery fan curves
 remain disabled. BIOS 2.01 remains installed; BIOS work is a separate vendor flow.
+
+
+### Pre-sleep handoff follow-up (2026-11-16)
+
+The native display-off and suspend callbacks restored all three Auto modes and
+original targets within 201 ms on the owner-confirmed Sleep/wake run. Independent
+post-wake readback and restoration of original settings/services passed. Six
+unattended recovery cases also passed. The timed SleepResume harness itself
+failed to complete before its deadline; its watchdog later killed the lingering
+worker and verified recovery. Preserve that failed result; do not describe it as
+a passed harness. See [the detailed assessment](sleep-handoff.md). This supersedes
+only the earlier absence of verified pre-sleep handoff, not the experimental
+status of custom curves or the remaining sensor/energy limitations.
