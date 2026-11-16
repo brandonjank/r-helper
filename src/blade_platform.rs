@@ -222,7 +222,7 @@ fn thermal_zones() -> Result<Value> {
     anyhow::bail!("Windows required")
 }
 #[cfg(windows)]
-fn windows_drivers() -> Result<Value> {
+pub(crate) fn windows_drivers() -> Result<Value> {
     use winreg::{enums::HKEY_LOCAL_MACHINE, RegKey};
     let root = RegKey::predef(HKEY_LOCAL_MACHINE)
         .open_subkey("SYSTEM\\CurrentControlSet\\Control\\Class")?;
@@ -264,7 +264,7 @@ fn windows_drivers() -> Result<Value> {
     )
 }
 #[cfg(not(windows))]
-fn windows_drivers() -> Result<Value> {
+pub(crate) fn windows_drivers() -> Result<Value> {
     anyhow::bail!("Windows required")
 }
 pub fn inspect() -> Result<Value> {

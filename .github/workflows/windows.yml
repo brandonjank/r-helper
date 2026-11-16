@@ -13,6 +13,17 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace --features librazer/diagnostic-gpu --locked
+      - name: Check diagnostic analysis and PowerShell syntax
+        shell: pwsh
+        run: |
+          python tools/test_sensor_analysis.py
+          if ($LASTEXITCODE -ne 0) { throw 'Sensor analysis tests failed.' }
+          foreach ($script in Get-ChildItem tools -Filter '*.ps1') {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors) { throw "$($script.Name): $($errors -join '; ')" }
+          }
       - run: cargo build --workspace --release --locked
       - uses: actions/upload-artifact@v4
         with:

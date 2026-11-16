@@ -20,6 +20,11 @@ thermal-zone diagnostics, guarded Windows resolution previews and an experimenta
 administrator-only NVIDIA clock preview. See [tested results and remaining
 requirements](docs/blade18-autonomous-batch.md).
 
+The next validation candidate adds an on-demand BIOS/firmware/driver panel,
+stronger fan/load guards and measured idle/battery test tools. See the
+[fan/sensor and battery validation batch](docs/blade18-validation-batch.md) for
+results, the accepted sensor limits and the remaining guided tests.
+
 Version 0.5.0 adds firmware keyboard effects and experimental per-key colors,
 AC/battery lighting presets and power policies, named application profiles,
 charge-once request/cancel, and guarded display changes with color-profile information.

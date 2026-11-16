@@ -1,5 +1,6 @@
 # Build outputs
 /target/
+**/__pycache__/
 **/*.d
 **/*.pdb
 

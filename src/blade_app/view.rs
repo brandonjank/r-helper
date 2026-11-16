@@ -74,10 +74,12 @@ impl BladeApp {
         let settings = Settings { ac: Some(Profile::capture(&state)), ..Settings::default() };
         let (_, power_updates) = mpsc::channel();
         Self {
+            benchmark_exit: None,
             vendor: crate::blade_vendor::Ui::default(),
             extended: None,
             controller_telemetry: None,
             platform_report: None,
+            updates_report: None,
             lamp_report: None,
             lamp_color: [32, 64, 255],
             lamp_highlight: false,

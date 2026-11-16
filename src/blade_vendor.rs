@@ -541,6 +541,31 @@ impl Drop for Session {
 }
 pub fn dispatch() -> Option<Result<()>> {
     let args = std::env::args().collect::<Vec<_>>();
+    if args.get(1)?.as_str() == "--vendor-validation-hold" {
+        return Some((|| {
+            ensure!(args.len() == 3, "Expected new validation directory");
+            ensure!(crate::blade_gpu::administrator(), "Administrator required for validation takeover");
+            ensure!(librazer::diagnostics::is_target_system() && librazer::blade18::ac_connected()?, "Blade 18 on AC required");
+            let state=librazer::blade18::status()?;
+            ensure!(state.performance==librazer::types::PerfMode::Balanced && state.fan_mode==librazer::types::FanMode::Auto,
+                "Select Balanced/Auto before the validation hold; this helper does not change performance settings");
+            let directory=PathBuf::from(&args[2]);std::fs::create_dir(&directory)?;
+            let mut session=Session::start()?;
+            let file=std::fs::File::options().create_new(true).write(true).open(directory.join("ready.json"))?;
+            serde_json::to_writer_pretty(&file,&serde_json::json!({"model":"RZ09-0529","vendor_recovery":session.path,"deadline_seconds":2700,"note":"No GUI or power-profile watcher. Fan tools retain their own recovery. Write release to end this hold before battery overhead measurement."}))?;file.sync_all()?;
+            let started=Instant::now();let mut health=Instant::now();
+            let held=(||->Result<()>{
+                while started.elapsed()<Duration::from_secs(2700) && !directory.join("release").exists(){
+                    if health.elapsed()>=Duration::from_secs(30){session.health()?;health=Instant::now();}
+                    std::thread::sleep(Duration::from_millis(500));
+                }Ok(())
+            })();
+            let released=session.stop();
+            let file=std::fs::File::options().create_new(true).write(true).open(directory.join("finished.json"))?;
+            serde_json::to_writer_pretty(&file,&serde_json::json!({"vendor_restored":released.is_ok(),"restore_error":released.as_ref().err().map(|e|format!("{e:#}")),"hold_error":held.as_ref().err().map(|e|format!("{e:#}"))}))?;file.sync_all()?;
+            released?;held?;Ok(())
+        })());
+    }
     if args.get(1)?.as_str() == "--vendor-preflight" {
         return Some((|| {
             ensure!(args.len() == 3, "Expected output path");

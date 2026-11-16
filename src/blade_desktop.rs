@@ -81,7 +81,7 @@ impl Desktop {
     }
 }
 
-fn wake(ctx: &egui::Context, hwnd: isize) {
+pub(crate) fn wake(ctx: &egui::Context, hwnd: isize) {
     // Hidden winit windows do not redraw. Restore our own window before waking egui.
     #[cfg(windows)]
     unsafe {
