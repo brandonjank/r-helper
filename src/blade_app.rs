@@ -1,3 +1,4 @@
+use crate::profile_activity as activity;
 use crate::{
     blade_desktop::{Action, Desktop},
     blade_profiles::{self, Settings},
@@ -17,8 +18,11 @@ struct Job {
     receiver: mpsc::Receiver<Result<State, String>>,
     save_as: Option<bool>,
     label: String,
+    activity: Option<activity::Activity>,
 }
 struct BladeApp {
+    section: view::Section,
+    activity: activity::Activity,
     benchmark_exit: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     vendor: crate::blade_vendor::Ui,
     extended: Option<serde_json::Value>,
@@ -96,6 +100,8 @@ impl BladeApp {
             curve_control.clone(),
         );
         let mut app = Self {
+            section: view::Section::Overview,
+            activity: activity::Activity::default(),
             benchmark_exit: None,
             vendor: crate::blade_vendor::Ui::default(),
             extended: None,
@@ -148,7 +154,7 @@ impl BladeApp {
             app.vendor.start(ctx, app.curve_control.clone());
         }
         app.batch.updates = Some(updates);
-        app.start(ctx, "Read device state", None, blade18::status);
+        app.start(ctx, "Read device state", None, None, blade18::status);
         app
     }
     fn start(
@@ -156,6 +162,7 @@ impl BladeApp {
         ctx: &egui::Context,
         label: &str,
         save_as: Option<bool>,
+        activity: Option<activity::Activity>,
         operation: impl FnOnce() -> anyhow::Result<State> + Send + 'static,
     ) {
         if self.preview {
@@ -166,16 +173,16 @@ impl BladeApp {
             return;
         }
         let (sender, receiver) = mpsc::channel();
-        self.job = Some(Job { receiver, save_as, label: label.into() });
+        self.job = Some(Job { receiver, save_as, label: label.into(), activity: activity.clone() });
         self.message = format!("{label}…");
-        if label.starts_with("Apply") || label.starts_with("Cycle") {
+        if activity.is_some() {
             self.display = None;
             self.lighting = None;
         }
         let repaint = ctx.clone();
         let curves = self.curve_control.clone();
         let policy = self.batch.watcher.as_ref().map(|w| w.sender());
-        let manual = label.starts_with("Apply") || label.starts_with("Cycle");
+        let manual = activity.is_some();
         std::thread::spawn(move || {
             let _ = sender.send(
                 crate::blade_curves::stop_and_wait(&curves)
@@ -246,6 +253,11 @@ impl BladeApp {
                 ctx,
                 if ac { "Apply AC profile" } else { "Apply battery profile" },
                 None,
+                Some(activity::Activity::power(
+                    ac,
+                    &self.settings,
+                    "Applied manually or with a shortcut",
+                )),
                 move || {
                     let state = blade_profiles::apply(&profile, display.as_ref())?;
                     if let Some(p) = lighting {
@@ -280,9 +292,17 @@ impl BladeApp {
                         .unwrap_or(0)
                         + 1)
                         % modes.len()];
-                    self.start(ctx, "Cycle performance mode", None, move || {
-                        blade18::change(Change::Performance(next))
-                    });
+                    self.start(
+                        ctx,
+                        "Cycle performance mode",
+                        None,
+                        Some(activity::Activity::new(
+                            "Manual settings",
+                            "Performance shortcut",
+                            "performance",
+                        )),
+                        move || blade18::change(Change::Performance(next)),
+                    );
                 }
             }
             Action::Quit => {
@@ -356,6 +376,10 @@ impl BladeApp {
         if let Some(receiver) = &self.sensor_job {
             match receiver.try_recv() {
                 Ok(Ok(report)) => {
+                    if let Ok(activity) = serde_json::from_value(report["applied_activity"].clone())
+                    {
+                        self.activity = activity;
+                    }
                     let completion_message = if report["lamp_preview"].is_object() {
                         "Auxiliary test ended · saved firmware lighting reapplied · confirm appearance"
                     } else if report["keyboard_batch"]["passed"] == true {
@@ -367,8 +391,12 @@ impl BladeApp {
                     if report["device_state"].is_object() {
                         self.state = serde_json::from_value(report["device_state"].clone()).ok();
                     }
-                    if report["platform_inventory"].is_object() {self.platform_report=Some(report["platform_inventory"].clone());}
-                    if report["updates_inventory"].is_object() {self.updates_report=Some(report["updates_inventory"].clone());}
+                    if report["platform_inventory"].is_object() {
+                        self.platform_report = Some(report["platform_inventory"].clone());
+                    }
+                    if report["updates_inventory"].is_object() {
+                        self.updates_report = Some(report["updates_inventory"].clone());
+                    }
                     if report["lighting_controls"].is_object() {
                         self.lighting =
                             serde_json::from_value(report["lighting_controls"].clone()).ok();
@@ -404,7 +432,7 @@ impl BladeApp {
                             self.lamp_report = Some(report["lamp_inventory"].clone());
                         }
                     } else if report["display_controls"].is_object() {
-                        self.batch.display_mode=None;
+                        self.batch.display_mode = None;
                         self.display =
                             serde_json::from_value(report["display_controls"].clone()).ok();
                         if let Some(path) = report["display_pending"].as_str() {
@@ -473,6 +501,9 @@ impl BladeApp {
                 let job = self.job.take().unwrap();
                 match result {
                     Ok(state) => {
+                        if let Some(activity) = job.activity {
+                            self.activity = activity;
+                        }
                         self.report = serde_json::to_string_pretty(&state).unwrap_or_default();
                         self.message = format!("{}: readback verified", job.label);
                         if let Some(ac) = job.save_as {
@@ -510,8 +541,10 @@ impl BladeApp {
 }
 impl eframe::App for BladeApp {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
-        if self.benchmark_exit.as_ref().is_some_and(|v|v.load(std::sync::atomic::Ordering::SeqCst)) {
-            self.quitting=true;ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        if self.benchmark_exit.as_ref().is_some_and(|v| v.load(std::sync::atomic::Ordering::SeqCst))
+        {
+            self.quitting = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         self.complete();
         self.batch_updates(ctx);
@@ -532,6 +565,9 @@ impl eframe::App for BladeApp {
             if let Some(result) = update.result {
                 match result {
                     Ok(state) => {
+                        if let Some(activity) = update.activity {
+                            self.activity = activity;
+                        }
                         self.report = serde_json::to_string_pretty(&state).unwrap_or_default();
                         self.state = Some(state);
                         self.message = if update.ac == Some(true) {
@@ -591,8 +627,12 @@ pub fn run_preview() -> Result<(), eframe::Error> {
     run_with_preview(true)
 }
 fn run_with_preview(preview: bool) -> Result<(), eframe::Error> {
-    let benchmark=if preview{None}else{crate::blade_benchmark::config().map_err(|e|eframe::Error::AppCreation(e.into()))?};
-    let hidden=benchmark.as_ref().is_some_and(|b|b.hidden);
+    let benchmark = if preview {
+        None
+    } else {
+        crate::blade_benchmark::config().map_err(|e| eframe::Error::AppCreation(e.into()))?
+    };
+    let hidden = benchmark.as_ref().is_some_and(|b| b.hidden);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_icon(crate::load_icon())
@@ -606,11 +646,15 @@ fn run_with_preview(preview: bool) -> Result<(), eframe::Error> {
         "R-Helper Blade 18",
         options,
         Box::new(move |cc| {
-            let mut app=if preview { BladeApp::preview(cc) } else { BladeApp::new(cc) };
-            if let Some(config)=benchmark {
-                use raw_window_handle::{HasWindowHandle,RawWindowHandle};
-                let hwnd=match cc.window_handle().map(|h|h.as_raw()){Ok(RawWindowHandle::Win32(h))=>h.hwnd.get(),_=>0};
-                app.benchmark_exit=Some(crate::blade_benchmark::start(config,cc.egui_ctx.clone(),hwnd));
+            let mut app = if preview { BladeApp::preview(cc) } else { BladeApp::new(cc) };
+            if let Some(config) = benchmark {
+                use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                let hwnd = match cc.window_handle().map(|h| h.as_raw()) {
+                    Ok(RawWindowHandle::Win32(h)) => h.hwnd.get(),
+                    _ => 0,
+                };
+                app.benchmark_exit =
+                    Some(crate::blade_benchmark::start(config, cc.egui_ctx.clone(), hwnd));
             }
             Ok(Box::new(app))
         }),

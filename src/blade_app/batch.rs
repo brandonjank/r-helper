@@ -40,11 +40,19 @@ impl Default for BatchUi {
         }
     }
 }
+/// Whether a successful operation replaces the application-profile restore point.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum BaselinePolicy {
+    Preserve,
+    CaptureManual(&'static str),
+}
+
 impl BladeApp {
     pub(super) fn batch_job(
         &mut self,
         ctx: &egui::Context,
         label: &str,
+        baseline: BaselinePolicy,
         work: impl FnOnce() -> anyhow::Result<serde_json::Value> + Send + 'static,
     ) {
         if self.preview || self.job.is_some() || self.sensor_job.is_some() {
@@ -56,13 +64,16 @@ impl BladeApp {
         let repaint = ctx.clone();
         let curves = self.curve_control.clone();
         let policy = self.batch.watcher.as_ref().map(|w| w.sender());
-        let manual = label.starts_with("Apply") || label.starts_with("Keep");
+        let manual = matches!(baseline, BaselinePolicy::CaptureManual(_));
         std::thread::spawn(move || {
             let result: anyhow::Result<serde_json::Value> = (|| {
                 crate::blade_curves::stop_and_wait(&curves)?;
                 let _lock = blade_profiles::operation_lock()?;
                 crate::blade_curves::stop_and_wait(&curves)?;
-                let result = work()?;
+                let mut result = work()?;
+                if manual {
+                    result["applied_activity"] = serde_json::json!({"name":"Manual settings", "reason":"Applied from R-Helper", "areas":if let BaselinePolicy::CaptureManual(area) = baseline { area } else { "" }});
+                }
                 if manual {
                     if let (Some(sender), Ok(snapshot)) =
                         (policy, blade_profiles::Named::capture("Manual settings".into()))
@@ -80,6 +91,9 @@ impl BladeApp {
         if let Some(updates) = &self.batch.updates {
             while let Ok(message) = updates.try_recv() {
                 self.message = message.message;
+                if let Some(activity) = message.activity {
+                    self.activity = activity;
+                }
                 if let Some(state) = message.state {
                     self.state = Some(state);
                 }
@@ -109,6 +123,11 @@ impl BladeApp {
                 self.batch_job(
                     ctx,
                     if keep { "Keep display mode" } else { "Restore display mode" },
+                    if keep {
+                        BaselinePolicy::CaptureManual("display")
+                    } else {
+                        BaselinePolicy::Preserve
+                    },
                     move || {
                         crate::blade_display::finish(&path, keep)
                             .map(|s| serde_json::json!({"display_controls":s}))
@@ -125,8 +144,13 @@ impl BladeApp {
         let mut charge = None;
         let mut read_charge = false;
         let mut save = false;
-        super::view::card(ui, "Keyboard effects + lighting profiles", |ui| {
-            ui.add_enabled_ui(enabled,|ui|{
+        super::view::section_card(
+            ui,
+            self.section,
+            super::view::Section::Lighting,
+            "Keyboard effects + lighting profiles",
+            |ui| {
+                ui.add_enabled_ui(enabled,|ui|{
                 egui::ComboBox::from_id_salt("full_keyboard_effect").selected_text(self.batch.draft.style.label()).show_ui(ui,|ui|{
                     for style in [Style::Off,Style::Static,Style::Breathing,Style::DualBreathing,Style::WaveLeft,Style::WaveRight,Style::Reactive,Style::Starlight,Style::Ripple,Style::PerKey]{if ui.selectable_value(&mut self.batch.draft.style,style,style.label()).changed(){self.batch.draft.speed=None;if !matches!(style,Style::Static|Style::PerKey){self.batch.draft.underside_color=None;self.batch.draft.underside_keys=None;}}}
                 });
@@ -161,10 +185,16 @@ impl BladeApp {
                 ui.horizontal_wrapped(|ui|{if ui.button("Save lighting for AC").clicked(){self.settings.lighting_ac=Some(self.batch.draft.clone());save=true;}if ui.button("Save lighting for battery").clicked(){self.settings.lighting_battery=Some(self.batch.draft.clone());save=true;}});
                 ui.small("Preset replaces the keyboard effect. Static colors send no recurring frames. The logo supports green brightness only.");
             });
-        });
+            },
+        );
         ui.add_space(8.0);
-        super::view::card(ui, "Lighting power policies", |ui| {
-            ui.add_enabled_ui(enabled,|ui|{
+        super::view::section_card(
+            ui,
+            self.section,
+            super::view::Section::Lighting,
+            "Lighting power policies",
+            |ui| {
+                ui.add_enabled_ui(enabled,|ui|{
                 save|=ui.checkbox(&mut self.settings.lighting_policy.enabled,"Enable lighting power policies").changed();
                 ui.horizontal(|ui|{ui.label("Idle timeout on AC");save|=ui.add(egui::DragValue::new(&mut self.settings.lighting_policy.idle_ac_seconds).range(0..=86400).suffix(" s")).changed();});
                 ui.horizontal(|ui|{ui.label("Idle timeout on battery");save|=ui.add(egui::DragValue::new(&mut self.settings.lighting_policy.idle_battery_seconds).range(0..=86400).suffix(" s")).changed();});
@@ -173,10 +203,16 @@ impl BladeApp {
                 save|=ui.add(egui::Slider::new(&mut self.settings.lighting_policy.low_battery_percent,0..=100).text("Battery cutoff %")).changed();
                 ui.small("0 disables a timeout/cutoff. Keyboard, logo and underside restore after activity. Policies pause during custom fan sessions.");
             });
-        });
+            },
+        );
         ui.add_space(8.0);
-        super::view::card(ui, "Named profiles", |ui| {
-            ui.add_enabled_ui(enabled && self.settings_error.is_none(),|ui|{
+        super::view::section_card(
+            ui,
+            self.section,
+            super::view::Section::Profiles,
+            "Named profiles",
+            |ui| {
+                ui.add_enabled_ui(enabled && self.settings_error.is_none(),|ui|{
                 ui.horizontal(|ui|{ui.text_edit_singleline(&mut self.batch.name);if ui.add_enabled(self.settings.named.len()<32,egui::Button::new("Capture current")).clicked(){capture=Some(self.batch.name.trim().to_owned());}});
                 if !self.settings.named.is_empty(){
                     self.batch.selected=self.batch.selected.min(self.settings.named.len()-1);
@@ -184,10 +220,11 @@ impl BladeApp {
                     let p=&mut self.settings.named[self.batch.selected];
                     ui.horizontal(|ui|{ui.label("Name");ui.text_edit_singleline(&mut p.name);});
                     ui.horizontal(|ui|{ui.label("Application");ui.text_edit_singleline(&mut p.executable).on_hover_text("Executable name only, e.g. game.exe. Empty means manual only.");});
+                    ui.small("Controls performance, fans, charge limit, full lighting and display settings.");
                     let chosen=p.clone();
                     ui.horizontal_wrapped(|ui|{
                         if ui.button("Save profile edits").clicked(){save=true;}
-                        if ui.button("Apply named profile").clicked(){self.batch.draft=chosen.lighting.clone();self.start(ctx,"Apply named profile",None,move||chosen.apply());}
+                        if ui.button("Apply named profile").clicked(){self.batch.draft=chosen.lighting.clone();self.start(ctx,"Apply named profile",None,Some(activity::Activity::named(&chosen,"Applied manually")),move||chosen.apply());}
                         if ui.button("Update from current").clicked(){replace=Some((self.batch.selected,self.settings.named[self.batch.selected].name.clone(),self.settings.named[self.batch.selected].executable.clone()));}
                         if ui.add_enabled(self.settings.named.len()<32,egui::Button::new("Duplicate")).clicked(){let mut p=self.settings.named[self.batch.selected].clone();p.name=format!("{} copy",p.name);p.executable.clear();self.settings.named.push(p);save=true;}
                         if ui.button("Remove").clicked(){self.settings.named.remove(self.batch.selected);save=true;}
@@ -205,51 +242,64 @@ impl BladeApp {
                     ui.small("Import leaves automatic switching and lighting policies off until you enable them.");
                 });
             });
-        });
+            },
+        );
         ui.add_space(8.0);
-        super::view::card(ui, "Charge fully once", |ui| {
-            ui.label(match self.batch.charge {
-                Some(true) => "One-time full charge requested",
-                Some(false) => "One-time override inactive",
-                None => "Read charging status to check the override",
-            });
-            ui.horizontal_wrapped(|ui| {
-                if ui.add_enabled(enabled, egui::Button::new("Read charging status")).clicked() {
-                    read_charge = true;
-                }
-                if ui
-                    .add_enabled(
-                        enabled && self.last_power == Some(true),
-                        egui::Button::new("Charge fully once"),
-                    )
-                    .clicked()
-                {
-                    charge = Some(true);
-                }
-                if ui.add_enabled(enabled, egui::Button::new("Cancel full charge")).clicked() {
-                    charge = Some(false);
-                }
-            });
-            ui.small("Preserves your normal charge limit. Completion and clearing are managed by firmware; readback verifies the request, not a completed charging cycle.");
-        });
+        super::view::section_card(
+            ui,
+            self.section,
+            super::view::Section::Overview,
+            "Charge fully once",
+            |ui| {
+                ui.label(match self.batch.charge {
+                    Some(true) => "One-time full charge requested",
+                    Some(false) => "One-time override inactive",
+                    None => "Read charging status to check the override",
+                });
+                ui.horizontal_wrapped(|ui| {
+                    if ui.add_enabled(enabled, egui::Button::new("Read charging status")).clicked()
+                    {
+                        read_charge = true;
+                    }
+                    if ui
+                        .add_enabled(
+                            enabled && self.last_power == Some(true),
+                            egui::Button::new("Charge fully once"),
+                        )
+                        .clicked()
+                    {
+                        charge = Some(true);
+                    }
+                    if ui.add_enabled(enabled, egui::Button::new("Cancel full charge")).clicked() {
+                        charge = Some(false);
+                    }
+                });
+                ui.small("Preserves your normal charge limit. Completion and clearing are managed by firmware; readback verifies the request, not a completed charging cycle.");
+            },
+        );
         if save {
             self.persist();
         }
         if let Some(preset) = apply {
-            self.batch_job(ctx, "Apply lighting preset", move || {
-                let s = preset.apply(&blade_profiles::journal_path("lighting-preset")?)?;
-                Ok(serde_json::json!({"lighting_controls":s,"device_state":blade18::status()?}))
-            });
+            self.batch_job(
+                ctx,
+                "Apply lighting preset",
+                BaselinePolicy::CaptureManual("lighting"),
+                move || {
+                    let s = preset.apply(&blade_profiles::journal_path("lighting-preset")?)?;
+                    Ok(serde_json::json!({"lighting_controls":s,"device_state":blade18::status()?}))
+                },
+            );
         }
         if let Some(name) = capture {
-            self.batch_job(ctx, "Capture named profile", move || {
+            self.batch_job(ctx, "Capture named profile", BaselinePolicy::Preserve, move || {
                 let p = blade_profiles::Named::capture(name)?;
                 p.validate()?;
                 Ok(serde_json::json!({"named_capture":p}))
             });
         }
         if let Some((index, name, executable)) = replace {
-            self.batch_job(ctx, "Update named profile", move || {
+            self.batch_job(ctx, "Update named profile", BaselinePolicy::Preserve, move || {
                 let mut p = blade_profiles::Named::capture(name)?;
                 p.executable = executable;
                 p.validate()?;
@@ -257,12 +307,12 @@ impl BladeApp {
             });
         }
         if let Some(value) = charge {
-            self.batch_job(ctx, "Set one-time charging", move || {
+            self.batch_job(ctx, "Set one-time charging", BaselinePolicy::Preserve, move || {
                 blade18::charge::set(value, &blade_profiles::journal_path("charge-once")?)
                     .map(|v| serde_json::json!({"charge_once":v}))
             });
         } else if read_charge {
-            self.batch_job(ctx, "Read charging status", || {
+            self.batch_job(ctx, "Read charging status", BaselinePolicy::Preserve, || {
                 blade18::charge::active().map(|v| serde_json::json!({"charge_once":v}))
             });
         }

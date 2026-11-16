@@ -4,6 +4,16 @@ use crate::packet::Packet;
 use anyhow::{anyhow, Context, Result};
 use std::{thread, time};
 
+static REPORT_WRITES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static REPORT_READS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Process-local attempted HID reports, for finite overhead diagnostics.
+/// Reading these counters does not open a device or issue a hardware query.
+pub fn transport_counters() -> (u64, u64) {
+    use std::sync::atomic::Ordering;
+    (REPORT_WRITES.load(Ordering::Relaxed), REPORT_READS.load(Ordering::Relaxed))
+}
+
 pub struct Device {
     device: hidapi::HidDevice,
     pub info: Descriptor,
@@ -82,6 +92,7 @@ impl Device {
         for attempt in 0..MAX_RETRIES {
             thread::sleep(time::Duration::from_micros(1000));
 
+            REPORT_WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             self.device
                 .send_feature_report(
                     [0_u8; 1] // report id
@@ -95,6 +106,7 @@ impl Device {
 
             thread::sleep(time::Duration::from_micros(2000));
 
+            REPORT_READS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let response_size = self.device.get_feature_report(&mut response_buf)?;
             if response_buf.len() != response_size {
                 // Audited Blade diagnostics/controls are getters or idempotent

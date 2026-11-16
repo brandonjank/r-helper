@@ -422,6 +422,10 @@ pub struct FanLabOptions {
     pub isolated_comparison: bool,
     pub observe_seconds: u16,
 }
+fn fan_lab_temperatures_valid(ec: [u8; 2]) -> bool {
+    (1..90).contains(&ec[0]) && (1..80).contains(&ec[1])
+}
+
 pub fn identify_main_fan(path: &Path, options: FanLabOptions) -> Result<Value> {
     let FanLabOptions {
         zone,
@@ -495,10 +499,7 @@ pub fn identify_main_fan(path: &Path, options: FanLabOptions) -> Result<Value> {
                 thread::sleep(Duration::from_secs(2));
                 let sample = crate::thermal::read(&device)?;
                 ensure!(
-                    ac_connected()?
-                        && sample.ec_celsius[0] > 0
-                        && sample.ec_celsius[0] < 90
-                        && sample.ec_celsius[1] < 80,
+                    ac_connected()? && fan_lab_temperatures_valid(sample.ec_celsius),
                     "Warmup power/temperature guard reached"
                 );
                 ensure!(
@@ -528,10 +529,7 @@ pub fn identify_main_fan(path: &Path, options: FanLabOptions) -> Result<Value> {
             thread::sleep(Duration::from_secs(2));
             let sample = crate::thermal::read(&device)?;
             ensure!(
-                ac_connected()?
-                    && sample.ec_celsius[0] > 0
-                    && sample.ec_celsius[0] < 90
-                    && sample.ec_celsius[1] < 80,
+                ac_connected()? && fan_lab_temperatures_valid(sample.ec_celsius),
                 "Identification thermal guard reached; restoring automatic cooling"
             );
             if isolated_comparison {
@@ -616,8 +614,12 @@ fn validate_fan_targets(
                 thread::sleep(Duration::from_secs(5));
                 let observed = read(&device)?;
                 ensure!(ac_connected()?, "AC disconnected; restoring captured fan settings");
-                ensure!(observed.performance == PerfMode::Balanced && observed.fan_mode == FanMode::Manual && observed.fan_setpoints == targets,
-                    "Fan mode or targets changed outside validation; restoring captured settings");
+                ensure!(
+                    observed.performance == PerfMode::Balanced
+                        && observed.fan_mode == FanMode::Manual
+                        && observed.fan_setpoints == targets,
+                    "Fan mode or targets changed outside validation; restoring captured settings"
+                );
                 if observed
                     .fan_actual
                     .iter()
@@ -631,8 +633,7 @@ fn validate_fan_targets(
                 if full_thermal {
                     let thermal = crate::thermal::read(&device)?;
                     ensure!(
-                        thermal.ec_celsius[0] > 0 && thermal.ec_celsius[0] < 90
-                            && thermal.ec_celsius[1] > 0 && thermal.ec_celsius[1] < 80,
+                        fan_lab_temperatures_valid(thermal.ec_celsius),
                         "Thermal guard reached; restoring captured settings"
                     );
                     report["thermal_samples"]
@@ -737,6 +738,15 @@ pub fn validate_batch(path: &Path) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fan_lab_rejects_missing_and_over_limit_temperatures_on_either_source() {
+        for ec in [[0, 40], [60, 0], [90, 40], [60, 80], [255, 40], [60, 255]] {
+            assert!(!fan_lab_temperatures_valid(ec), "{ec:?}");
+        }
+        for ec in [[1, 1], [60, 40], [89, 79]] {
+            assert!(fan_lab_temperatures_valid(ec));
+        }
+    }
     #[test]
     fn manual_mode_resets_precede_targets_and_are_skipped_for_updates() {
         let initial = manual_fan_commands([4500, 4000], true);

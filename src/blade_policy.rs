@@ -113,18 +113,26 @@ pub struct Watcher {
     thread: Option<std::thread::JoinHandle<()>>,
 }
 pub struct Update {
+    pub activity: Option<crate::profile_activity::Activity>,
     pub message: String,
     pub state: Option<blade18::State>,
 }
 struct Reporter(mpsc::Sender<Update>);
 impl Reporter {
     fn send(&self, message: String) -> Result<(), mpsc::SendError<Update>> {
+        self.send_activity(message, None)
+    }
+    fn send_activity(
+        &self,
+        message: String,
+        activity: Option<crate::profile_activity::Activity>,
+    ) -> Result<(), mpsc::SendError<Update>> {
         let state = if message.contains("unavailable") || message.starts_with("Automation:") {
             None
         } else {
             blade18::status().ok()
         };
-        self.0.send(Update { message, state })
+        self.0.send(Update { activity, message, state })
     }
 }
 impl Watcher {
@@ -271,24 +279,32 @@ impl Watcher {
                             active = next.clone();
                             applied = None;
                             power_lighting = None;
-                            let _ = sender.send(
+                            let _ = sender.send_activity(
                                 "Resume settings restored · panel and modes revalidated".into(),
+                                Some(crate::profile_activity::Activity::new(
+                                    "Restored settings",
+                                    "Resumed from sleep",
+                                    "enabled profile and lighting settings",
+                                )),
                             );
                             ctx.request_repaint();
                         }
                         resumed = false;
                     }
-                    if selected.is_some() && active != next {
+                    if let Some(profile) = selected.as_ref().filter(|_| active != next) {
                         if baseline.is_none() {
                             baseline = Some(Named::capture("Automation recovery".into())?);
                         }
-                        selected.as_ref().unwrap().apply()?;
+                        profile.apply()?;
                         active = next;
                         applied = None;
-                        let _ = sender.send(format!(
-                            "Application profile: {}",
-                            selected.as_ref().unwrap().name
-                        ));
+                        let _ = sender.send_activity(
+                            format!("Application profile: {}", profile.name),
+                            Some(crate::profile_activity::Activity::named(
+                                profile,
+                                "Foreground application changed",
+                            )),
+                        );
                         ctx.request_repaint();
                     } else if selected.is_none() && active.is_some() {
                         if !stopping && saved.automatic {
@@ -314,8 +330,14 @@ impl Watcher {
                         }
                         active = None;
                         applied = None;
-                        let _ = sender
-                            .send("Application profile ended · previous settings restored".into());
+                        let _ = sender.send_activity(
+                            "Application profile ended · previous settings restored".into(),
+                            Some(crate::profile_activity::Activity::new(
+                                "Restored settings",
+                                "Foreground application profile ended",
+                                "power profile or previous settings",
+                            )),
+                        );
                         ctx.request_repaint();
                     }
                     if saved.lighting_policy.enabled && !stopping {
